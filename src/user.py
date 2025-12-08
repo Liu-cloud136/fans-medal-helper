@@ -276,11 +276,7 @@ class BiliUser:
                     watch_list.remove(medal)
                     continue
                 if await self.api.get_medal_light_status(uid)==0:
-                    status = await self.api.getRoomLiveStatus(room_id)
-                    if status == 1:
-                        await self.like_room(room_id, medal, times=36)
-                    else:
-                        await self.like_room(room_id, medal, times=36)
+                    await self.like_room(room_id, medal, times=36)
                     if await self.api.get_medal_light_status(uid)==0:
                         self.log.error(f"{medal['anchor_info']['nick_name']} 灯牌点亮失败，已将灯牌放至列表最后")
                         watch_list.remove(medal)
@@ -434,27 +430,9 @@ class BiliUser:
                     room_id = medal["room_info"]["room_id"]
                     guard = medal["medal"]["guard_level"]
 
-                    try:
-                        status = await self.api.getRoomLiveStatus(room_id)
-                    except Exception as e:
-                        # 网络或 API 错误：指数退避，日志每 LOG_INTERVAL 打一次
-                        st["fail_count"] += 1
-                        backoff = min(LOG_INTERVAL, 2 ** min(st["fail_count"], 10))
-                        st["next_check"] = now + backoff
-                        if now - st["last_log"] > LOG_INTERVAL:
-                            st["last_log"] = now
-                            self.log.warning(f"{medal['anchor_info']['nick_name']} 获取房间开播状态失败: {e} （后续 {int(backoff)}s 内不再重试）")
-                        continue
+                    # 点赞任务不需要检查开播状态
 
-                    # 非直播则不点赞：短退避，日志按 LOG_INTERVAL 节流
-                    if status != 1:
-                        st["fail_count"] += 1
-                        st["next_check"] = now + 60  # 状态不符合时短退避
-                        if st["fail_count"] == 1 or (now - st["last_log"] > LOG_INTERVAL):
-                            st["last_log"] = now
-                            if guard > 0:
-                                self.log.info(f"{medal['anchor_info']['nick_name']} 未开播，点赞任务加入重试列表")
-                        continue
+                    # 点赞任务不再检查开播状态，直接执行
 
                     # 真正执行点赞 —— 成功后移除 retry 状态并清理列表
                     try:
