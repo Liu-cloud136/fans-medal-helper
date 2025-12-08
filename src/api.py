@@ -258,36 +258,7 @@ class BiliApi:
         # for _ in range(3):
         await self.__post(url, data=SingableDict(data).signed, headers=self.headers)
 
-    async def sendDanmaku(self, room_id: int, msg: str = None) -> str:
-        """
-        发送弹幕（单次请求失败就抛异常，由上层处理重试）
-        """
-        url = "https://api.live.bilibili.com/xlive/app-room/v1/dM/sendmsg"
-        danmakus = [
-            "(⌒▽⌒).", "（￣▽￣）.", "(=・ω・=).", "(｀・ω・´).", "(〜￣△￣)〜.",
-            "(･∀･).", "(°∀°)ﾉ.", "(￣3￣).", "╮(￣▽￣)╭.", "_(:3」∠)_",
-            "(^・ω・^ ).", "(●￣(ｴ)￣●).", "ε=ε=(ノ≧∇≦)ノ.", "⁄(⁄ ⁄•⁄ω⁄•⁄ ⁄)⁄.", "←◡←.",
-        ]
-        params = {
-            "access_key": self.u.access_key,
-            "actionKey": "appkey",
-            "appkey": Crypto.APPKEY,
-            "ts": int(time.time()),
-        }
-        data = {
-            "cid": room_id,
-            "msg": msg if msg else random.choice(danmakus),
-            "rnd": int(time.time()),
-            "color": "16777215",
-            "fontsize": "25",
-        }
-        self.headers.update({"Content-Type": "application/x-www-form-urlencoded"})
 
-        # 仅尝试一次，如果失败则直接抛异常
-        resp = await self.__post(
-            url, params=SingableDict(params).signed, data=data, headers=self.headers
-        )
-        return json.loads(resp["mode_info"]["extra"])["content"]
     
     @retry()
     async def heartbeat(self, room_id: int, up_id: int):

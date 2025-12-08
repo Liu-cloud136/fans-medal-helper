@@ -11,11 +11,11 @@ from loguru import logger
 import warnings
 import asyncio
 import aiohttp
+from datetime import datetime
 from src import BiliUser
-from src.update_checker import check_update
+
 
 log = logger.bind(user="B站粉丝牌助手")
-__VERSION__ = "2.0.2"
 
 warnings.filterwarnings(
     "ignore",
@@ -32,16 +32,18 @@ try:
         with open("users.yaml", "r", encoding="utf-8") as f:
             users = yaml.load(f, Loader=yaml.FullLoader)
     assert users["LIKE_CD"] >= 0, "LIKE_CD参数错误"
-    assert users["DANMAKU_CD"] >= 0, "DANMAKU_CD参数错误"
     assert users["WATCH_TARGET"] >= 0, "WATCH_TARGET参数错误"
     assert users["WATCH_MAX_ATTEMPTS"] >= users["WATCH_TARGET"], "WATCH_MAX_ATTEMPTS参数错误，不能小于WATCH_TARGET"
     assert users["WEARMEDAL"] in [0, 1], "WEARMEDAL参数错误"
+    assert users.get("MAX_CONCURRENT_WATCH", 3) >= 1, "MAX_CONCURRENT_WATCH参数必须大于等于1"
+    assert users.get("NOTIFY_DETAIL", 1) in [0, 1], "NOTIFY_DETAIL参数错误，必须为0或1"
     config = {
         "LIKE_CD": users["LIKE_CD"],
-        "DANMAKU_CD": users["DANMAKU_CD"],
         "WATCH_TARGET": users["WATCH_TARGET"],
         "WATCH_MAX_ATTEMPTS": users["WATCH_MAX_ATTEMPTS"],
         "WEARMEDAL": users["WEARMEDAL"],
+        "MAX_CONCURRENT_WATCH": users.get("MAX_CONCURRENT_WATCH", 3),
+        "NOTIFY_DETAIL": users.get("NOTIFY_DETAIL", 1),
         "PROXY": users.get("PROXY"),
     }
 except Exception as e:
@@ -53,29 +55,11 @@ except Exception as e:
 async def main():
     messageList = []
     async with aiohttp.ClientSession(trust_env=True) as session:
-        check_update()
-#         try:
-#             log.warning("当前版本为: " + __VERSION__)
-#             resp = await (
-#                 await session.get(
-#                     "http://version.fansmedalhelper.1961584514352337.cn-hangzhou.fc.devsapp.net/"
-#                 )
-#             ).json()
-#             if resp["version"] != __VERSION__:
-#                 log.warning(f"新版本为: {resp['version']}，请更新")
-#                 log.warning("更新内容: " + resp["changelog"])
-#                 messageList.append(f"当前版本: {__VERSION__}，最新版本: {resp['version']}")
-#                 messageList.append(f"更新内容: {resp['changelog']}")
-#             if resp["notice"]:
-#                 log.warning("公告: " + resp["notice"])
-#                 messageList.append(f"公告: {resp['notice']}")
-#         except Exception as ex:
-#             log.warning(f"检查版本失败: {ex}")
-#             messageList.append(f"检查版本失败: {ex}")
 
         # ------------------------------
         # 创建任务
         # ------------------------------
+        biliUsers = []
         startTasks = []
         for user in users["USERS"]:
             if user.get("access_key"):
@@ -85,6 +69,7 @@ async def main():
                     user.get("banned_uid", ""),
                     config,
                 )
+                biliUsers.append(biliUser)
                 startTasks.append(biliUser.start())  # ✅ 新逻辑入口
 
         # ------------------------------
@@ -94,26 +79,52 @@ async def main():
             await asyncio.gather(*startTasks)
         except Exception as e:
             log.exception(e)
-            messageList.append(f"任务执行失败: {e}")
+            messageList.append(f"🚨 任务执行失败: {e}")
+
+        # ------------------------------
+        # 收集所有用户的执行结果
+        # ------------------------------
+        success_count = 0
+        error_count = 0
+        
+        for biliUser in biliUsers:
+            if biliUser.errmsg:
+                error_count += 1
+                messageList.extend([f"👤 {biliUser.name} 错误信息:"] + biliUser.errmsg)
+            elif biliUser.message:
+                success_count += 1
+                messageList.extend([f"👤 {biliUser.name} 执行结果:"] + biliUser.message)
+        
+        # 添加总体统计
+        if success_count > 0 or error_count > 0:
+            messageList.insert(0, f"📋 执行汇总: 成功 {success_count} 个用户，失败 {error_count} 个用户")
+            messageList.append(f"⏰ 执行时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
         # ------------------------------
         # 消息推送
         # ------------------------------
-        if users.get("SENDKEY", ""):
-            await push_message(session, users["SENDKEY"], "  \n".join(messageList))
+        if messageList:
+            # 格式化消息内容
+            formatted_message = "\n".join(messageList)
+            log.info(f"准备推送通知内容:\n{formatted_message}")
+            
+            if users.get("SENDKEY", ""):
+                await push_message(session, users["SENDKEY"], formatted_message)
 
-        if users.get("MOREPUSH", ""):
-            from onepush import notify
-            notifier = users["MOREPUSH"]["notifier"]
-            params = users["MOREPUSH"]["params"]
-            await notify(
-                notifier,
-                title=f"【B站粉丝牌助手推送】",
-                content="  \n".join(messageList),
-                **params,
-                proxy=config.get("PROXY"),
-            )
-            log.info(f"{notifier} 已推送")
+            if users.get("MOREPUSH", ""):
+                from onepush import notify
+                notifier = users["MOREPUSH"]["notifier"]
+                params = users["MOREPUSH"]["params"]
+                await notify(
+                    notifier,
+                    title=f"【B站粉丝牌助手推送】",
+                    content=formatted_message,
+                    **params,
+                    proxy=config.get("PROXY"),
+                )
+                log.info(f"{notifier} 已推送")
+        else:
+            log.info("没有生成通知内容，跳过推送")
 
     log.info("所有任务执行完成。")
 

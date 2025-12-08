@@ -1,6 +1,16 @@
+# B站粉丝牌助手依赖包
+# 核心 HTTP 客户端
 aiohttp>=3.8.0
 aiohttp-socks>=0.8.0
+
+# 日志系统
 loguru>=0.7.0
+
+# 配置文件解析
 PyYAML>=6.0
+
+# 任务调度
 APScheduler>=3.10.0
+
+# 时区处理
 pytz>=2023.3
