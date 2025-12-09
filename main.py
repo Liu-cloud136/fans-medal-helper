@@ -30,21 +30,38 @@ try:
         import yaml
 
         with open("users.yaml", "r", encoding="utf-8") as f:
-            users = yaml.load(f, Loader=yaml.FullLoader)
-    assert users["LIKE_CD"] >= 0, "LIKE_CD参数错误"
-    assert users["WATCH_TARGET"] >= 0, "WATCH_TARGET参数错误"
-    assert users["WATCH_MAX_ATTEMPTS"] >= users["WATCH_TARGET"], "WATCH_MAX_ATTEMPTS参数错误，不能小于WATCH_TARGET"
-    assert users["WEARMEDAL"] in [0, 1], "WEARMEDAL参数错误"
-    assert users.get("MAX_CONCURRENT_WATCH", 3) >= 1, "MAX_CONCURRENT_WATCH参数必须大于等于1"
-    assert users.get("NOTIFY_DETAIL", 1) in [0, 1], "NOTIFY_DETAIL参数错误，必须为0或1"
+            users = yaml.safe_load(f)
+    
+    # 验证必要字段是否存在
+    if "USERS" not in users:
+        log.error("配置文件中缺少USERS字段")
+        exit(1)
+    
+    # 参数验证，使用安全的get方法
+    like_cd = users.get("LIKE_CD", 0.3)
+    watch_target = users.get("WATCH_TARGET", 25)
+    watch_max_attempts = users.get("WATCH_MAX_ATTEMPTS", 50)
+    wearmedal = users.get("WEARMEDAL", 0)
+    max_concurrent_watch = users.get("MAX_CONCURRENT_WATCH", 3)
+    notify_detail = users.get("NOTIFY_DETAIL", 1)
+    
+    assert like_cd >= 0, "LIKE_CD参数错误"
+    assert watch_target >= 0, "WATCH_TARGET参数错误"
+    assert watch_max_attempts >= watch_target, "WATCH_MAX_ATTEMPTS参数错误，不能小于WATCH_TARGET"
+    assert wearmedal in [0, 1], "WEARMEDAL参数错误"
+    assert max_concurrent_watch >= 1, "MAX_CONCURRENT_WATCH参数必须大于等于1"
+    assert notify_detail in [0, 1], "NOTIFY_DETAIL参数错误，必须为0或1"
+    
     config = {
-        "LIKE_CD": users["LIKE_CD"],
-        "WATCH_TARGET": users["WATCH_TARGET"],
-        "WATCH_MAX_ATTEMPTS": users["WATCH_MAX_ATTEMPTS"],
-        "WEARMEDAL": users["WEARMEDAL"],
-        "MAX_CONCURRENT_WATCH": users.get("MAX_CONCURRENT_WATCH", 3),
-        "NOTIFY_DETAIL": users.get("NOTIFY_DETAIL", 1),
+        "LIKE_CD": like_cd,
+        "WATCH_TARGET": watch_target,
+        "WATCH_MAX_ATTEMPTS": watch_max_attempts,
+        "WEARMEDAL": wearmedal,
+        "MAX_CONCURRENT_WATCH": max_concurrent_watch,
+        "NOTIFY_DETAIL": notify_detail,
         "PROXY": users.get("PROXY"),
+        "API_RATE_LIMIT": users.get("API_RATE_LIMIT", 0.5),
+        "MAX_API_CONCURRENT": users.get("MAX_API_CONCURRENT", 3),
     }
 except Exception as e:
     log.error(f"读取配置文件失败，请检查格式是否正确: {e}")
@@ -76,7 +93,7 @@ async def main():
         # 并发执行所有用户任务
         # ------------------------------
         try:
-            await asyncio.gather(*startTasks)
+            await asyncio.gather(*startTasks, return_exceptions=True)
         except Exception as e:
             log.exception(e)
             messageList.append(f"🚨 任务执行失败: {e}")
@@ -84,6 +101,13 @@ async def main():
         # ------------------------------
         # 收集所有用户的执行结果
         # ------------------------------
+        
+        # 清理用户资源
+        for biliUser in biliUsers:
+            try:
+                await biliUser.cleanup()
+            except Exception as e:
+                log.warning(f"清理用户 {biliUser.name} 资源时出错: {e}")
         success_count = 0
         error_count = 0
         
@@ -147,32 +171,5 @@ def run(*args, **kwargs):
 
 
 if __name__ == "__main__":
-    cron = users.get("CRON", None)
-
-    if cron:
-#         from apscheduler.schedulers.blocking import BlockingScheduler
-#         from apscheduler.triggers.cron import CronTrigger
-# 
-#         log.info(f"使用内置定时器 {cron}，开启定时任务。")
-#         scheduler = BlockingScheduler()
-#         scheduler.add_job(run, CronTrigger.from_crontab(cron), misfire_grace_time=3600)
-#         scheduler.start()
-        log.info("已配置定时器，开启循环任务。")
-        run()
-    elif "--auto" in sys.argv:
-        from apscheduler.schedulers.blocking import BlockingScheduler
-        from apscheduler.triggers.interval import IntervalTrigger
-        import datetime
-
-        log.info("使用自动守护模式，每隔 24 小时运行一次。")
-        scheduler = BlockingScheduler(timezone="Asia/Shanghai")
-        scheduler.add_job(
-            run,
-            IntervalTrigger(hours=24),
-            next_run_time=datetime.datetime.now(),
-            misfire_grace_time=3600,
-        )
-        scheduler.start()
-    else:
-        log.info("未配置定时器，开启单次任务。")
-        run()
+    log.info("青龙面板部署模式，执行单次任务。")
+    run()

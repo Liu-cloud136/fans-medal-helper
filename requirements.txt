@@ -9,8 +9,5 @@ loguru>=0.7.0
 # 配置文件解析
 PyYAML>=6.0
 
-# 任务调度
-APScheduler>=3.10.0
-
 # 时区处理
 pytz>=2023.3
