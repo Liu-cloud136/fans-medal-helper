@@ -31,6 +31,7 @@ class BiliUser:
     """
     def __init__(self, access_token: str, whiteUIDs: str = '', bannedUIDs: str = '', config: dict = {}):
         from .api import BiliApi
+        import random
         def _parse_uid_input(uids):
             """
             将多种可能的输入规范化为 int 列表。
@@ -96,6 +97,12 @@ class BiliUser:
         self.api = BiliApi(self, self.session)
         self._current_watch_tasks = []  # 存储所有并行的观看任务
         self._retry_info = {}
+        
+        # 添加API调用限流控制
+        max_concurrent = self.config.get("MAX_API_CONCURRENT", 3)
+        self._api_semaphore = asyncio.Semaphore(max_concurrent)  # 限制同时最多API调用数
+        self._last_api_call = {}  # 记录每个API的最后一次调用时间
+        self._api_min_interval = self.config.get("API_RATE_LIMIT", 0.5)  # API调用最小间隔
 
         self.log = logger.bind(user=self.name or "未知用户", uid=self.uuids)
         self.log_file = f"logs/{self.uuids}.log"
@@ -146,6 +153,40 @@ class BiliUser:
         self._save_log(logs)
     
     
+    # ------------------------- API限流控制 -------------------------
+    async def _rate_limit_api(self, api_name: str):
+        """API调用频率限制"""
+        current_time = time.time()
+        last_call = self._last_api_call.get(api_name, 0)
+        min_interval = self._api_min_interval
+        
+        if current_time - last_call < min_interval:
+            wait_time = min_interval - (current_time - last_call)
+            await asyncio.sleep(wait_time)
+        
+        self._last_api_call[api_name] = time.time()
+    
+    async def _limited_api_call(self, api_func, *args, **kwargs):
+        """带限流的API调用"""
+        async with self._api_semaphore:
+            api_name = api_func.__name__
+            await self._rate_limit_api(api_name)
+            
+            max_retries = 3
+            base_delay = 1
+            
+            for attempt in range(max_retries):
+                try:
+                    return await api_func(*args, **kwargs)
+                except Exception as e:
+                    if attempt == max_retries - 1:
+                        raise
+                    
+                    # 指数退避
+                    delay = base_delay * (2 ** attempt) + random.uniform(0.5, 1.5)
+                    self.log.warning(f"API调用 {api_name} 失败 (第{attempt+1}次): {e}, {delay:.1f}秒后重试")
+                    await asyncio.sleep(delay)
+
     # ------------------------- 登录与初始化 -------------------------
     async def loginVerify(self):
         info = await self.api.loginVerift()
@@ -234,16 +275,18 @@ class BiliUser:
             fail_count = 0
             while fail_count < 3:
                 try:
-                    await self.api.likeInteractV3(room_id, target_id, self.mid)
+                    await self._limited_api_call(self.api.likeInteractV3, room_id, target_id, self.mid)
                     success_count += 1
-                    await asyncio.sleep(self.config.get("LIKE_CD", 0.3))
+                    # 增加随机延迟，避免固定间隔
+                    delay = self.config.get("LIKE_CD", 0.3) + random.uniform(0.1, 0.5)
+                    await asyncio.sleep(delay)
                     break  # 成功后退出重试循环
                 except Exception as e:
                     fail_count += 1
                     self.log.warning(f"{name} 第 {i+1}/{times} 次点赞失败: {e}， 进行重试 (第{fail_count}/3次)")
                     
                     if fail_count < 3:
-                        await asyncio.sleep(1)  # 等待1秒后重试
+                        await asyncio.sleep(1 + random.uniform(0.5, 1.5))  # 随机延迟1-2.5秒后重试
                     else:
                         self.log.error(f"{name} 第 {i+1}/{times} 次点赞连续失败3次，放弃此条。")
                         break
@@ -326,13 +369,13 @@ class BiliUser:
                     self.api = BiliApi(self, self.session)
                 
                 # 每分钟发送心跳，每5分钟检查一次进度
-                await self.api.heartbeat(room_id, target_id)
+                await self._limited_api_call(self.api.heartbeat, room_id, target_id)
                 consecutive_failures = 0  # 重置连续失败计数
                 
                 attempts += 1
                 if attempts % 5 == 0:  # 每5分钟检查一次进度
                     try:
-                        watched = await self.api.getWatchLiveProgress(target_id) * 5
+                        watched = await self._limited_api_call(self.api.getWatchLiveProgress, target_id) * 5
                         self.log.info(f"{name} 当前观看进度: {watched}/{WATCH_TARGET} 分钟")
                         
                         if watched >= WATCH_TARGET:
