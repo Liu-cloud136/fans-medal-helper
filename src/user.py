@@ -255,8 +255,10 @@ class BiliUser:
             guard_level = medal_info.get("guard_level", 0)
             is_lighted = medal_info.get("is_lighted", 1)
             
-            # 点赞任务：未完成点赞 且 (灯牌未点亮 or 是大航海房间)
-            if like_cd and uid not in logs.get("like", []) and (is_lighted == 0 or guard_level > 0):
+            # 点赞任务：未完成点赞
+            # 策略：大航海房间每天点赞获得额外亲密度，普通房间点赞维持灯牌点亮
+            if like_cd and uid not in logs.get("like", []):
+                # 对所有未完成点赞的房间执行点赞任务
                 self.like_list.append(medal)
                 
             # 观看任务
