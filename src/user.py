@@ -206,7 +206,7 @@ class BiliUser:
         self.medals.clear()
         all_medals = {}
         like_cd = self.config.get("LIKE_CD", 0.3)
-        watch_cd = self.config.get("WATCH_TARGET", 25)
+        watch_cd = self.config.get("WATCH_TARGET", 5)  # 新规：默认5次即可完成
         
         self.log.info(f"开始获取任务列表，粉丝牌顺序为（排名先后即为执行任务先后）：")
         
@@ -247,7 +247,7 @@ class BiliUser:
 
         today = self._now_beijing().strftime("%Y-%m-%d")
         logs = self._load_log().get(today, {})
-        WATCH_TARGET = self.config.get("WATCH_TARGET", 25)
+        WATCH_TARGET = self.config.get("WATCH_TARGET", 5)  # 新规：默认5次即可完成
 
         for medal in self.medals:
             uid = medal["medal"]["target_id"]
@@ -316,7 +316,7 @@ class BiliUser:
     # ------------------------- 观看任务 -------------------------
     async def get_next_watchable(self, watch_list):
         """返回列表中最靠前的可观看房间（观看时长未达到25 min）"""
-        WATCH_TARGET = self.config.get("WATCH_TARGET", 25)
+        WATCH_TARGET = self.config.get("WATCH_TARGET", 5)  # 新规：默认5次即可完成
         for medal in watch_list.copy():
             uid = medal["medal"]["target_id"]
             room_id = medal["room_info"]["room_id"]
@@ -352,8 +352,8 @@ class BiliUser:
         name = medal["anchor_info"]["nick_name"]
         target_id = medal["medal"]["target_id"]
 
-        WATCH_TARGET = self.config.get("WATCH_TARGET", 25)
-        MAX_ATTEMPTS = self.config.get("WATCH_MAX_ATTEMPTS", 50)
+        WATCH_TARGET = self.config.get("WATCH_TARGET", 5)  # 新规：默认5次即可完成
+        MAX_ATTEMPTS = self.config.get("WATCH_MAX_ATTEMPTS", 10)  # 新规：减少尝试次数
         attempts = 0
         consecutive_failures = 0
         MAX_CONSECUTIVE_FAILURES = 3
@@ -494,7 +494,10 @@ class BiliUser:
                 self.log.info(f"开始执行 {name} 点赞任务 (大航海等级: {guard})")
                 
                 try:
-                    times = 38 if guard == 0 else 36
+                    # 新规调整：点赞每日可获得1航海亲密度，上限5亲密度
+                    # 普通房间：点赞5次（维持灯牌和获得基础亲密度）
+                    # 大航海房间：点赞5次（获得1.5倍加成的亲密度）
+                    times = 5  # 新规：统一5次点赞即可获得每日上限
                     success_count = await self.like_room(room_id, medal, times=times)
                     
                     self.like_list.remove(medal)
@@ -516,7 +519,7 @@ class BiliUser:
 
         # ---------- 观看管理子循环 ----------
         async def watch_manager_loop():
-            MAX_CONCURRENT_WATCH = self.config.get("MAX_CONCURRENT_WATCH", 3)
+            MAX_CONCURRENT_WATCH = self.config.get("MAX_CONCURRENT_WATCH", 6)  # 新规：增加并发数提高效率
             
             while self.watch_list or self._current_watch_tasks:
                 # 清理已完成的任务

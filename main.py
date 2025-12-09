@@ -39,8 +39,8 @@ try:
     
     # 参数验证，使用安全的get方法
     like_cd = users.get("LIKE_CD", 0.3)
-    watch_target = users.get("WATCH_TARGET", 25)
-    watch_max_attempts = users.get("WATCH_MAX_ATTEMPTS", 50)
+    watch_target = users.get("WATCH_TARGET", 5)  # 新规：5次×5分钟=25分钟满亲密度
+    watch_max_attempts = users.get("WATCH_MAX_ATTEMPTS", 10)  # 新规：大幅减少尝试次数
     wearmedal = users.get("WEARMEDAL", 0)
     max_concurrent_watch = users.get("MAX_CONCURRENT_WATCH", 3)
     notify_detail = users.get("NOTIFY_DETAIL", 1)
