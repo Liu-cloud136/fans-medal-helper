@@ -27,9 +27,19 @@ case ${MIRRORS} in
     git remote set-url origin https://mirror.ghproxy.com/https://github.com/Liu-cloud136/fans-medal-helper.git
     ;;
 "2")
-    # http://fastgit.org/
+    # https://hub.fastgit.xyz/
     echo -e "${Green} [INFO] 使用镜像源-FastGIT ${Plain}"
     git remote set-url origin https://hub.fastgit.xyz/Liu-cloud136/fans-medal-helper.git
+    ;;
+"3")
+    # https://ghproxy.cn/
+    echo -e "${Green} [INFO] 使用镜像源-GHProxyCN ${Plain}"
+    git remote set-url origin https://ghproxy.cn/https://github.com/Liu-cloud136/fans-medal-helper.git
+    ;;
+"4")
+    # https://gitclone.com/
+    echo -e "${Green} [INFO] 使用镜像源-GitClone ${Plain}"
+    git remote set-url origin https://gitclone.com/github.com/Liu-cloud136/fans-medal-helper.git
     ;;
 *)
     echo -e "${Green} [INFO] 使用源-GitHub ${Plain}"
@@ -37,9 +47,42 @@ case ${MIRRORS} in
     ;;
 esac
 
-echo -e "${Green} [INFO] 拉取项目更新... ${Plain}"
+# 重试拉取函数
+retry_pull() {
+    local max_retries=3
+    local retry_count=0
+    
+    while [ $retry_count -lt $max_retries ]; do
+        echo -e "${Green} [INFO] 尝试拉取项目更新 (第$((retry_count + 1))次)... ${Plain}"
+        
+        if git pull --no-tags origin master; then
+            echo -e "${Green} [INFO] 项目更新成功！ ${Plain}"
+            return 0
+        else
+            echo -e "${Red} [WARN] 拉取失败，5秒后重试... ${Plain}"
+            retry_count=$((retry_count + 1))
+            sleep 5
+            
+            # 如果重试失败，尝试切换镜像源
+            if [ $retry_count -eq 1 ] && [ "${MIRRORS}" = "1" ]; then
+                echo -e "${Yellow} [INFO] GHProxy失败，尝试切换到FastGIT... ${Plain}"
+                git remote set-url origin https://hub.fastgit.xyz/Liu-cloud136/fans-medal-helper.git
+            elif [ $retry_count -eq 2 ] && [ "${MIRRORS}" = "1" ]; then
+                echo -e "${Yellow} [INFO] FastGIT失败，尝试切换到GitHub源... ${Plain}"
+                git remote set-url origin https://github.com/Liu-cloud136/fans-medal-helper.git
+            fi
+        fi
+    done
+    
+    echo -e "${Red} [ERR] 拉取失败，但继续运行本地代码... ${Plain}"
+    return 1
+}
+
+echo -e "${Green} [INFO] 配置Git安全目录... ${Plain}"
 git config --global --add safe.directory "*"
-git pull --no-tags origin master
+
+# 执行拉取
+retry_pull
 
 echo -e "${Green} [INFO] 开始运行... ${Plain}"
 python3 main.py
