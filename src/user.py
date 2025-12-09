@@ -273,14 +273,17 @@ class BiliUser:
             try:
                 watched = await self.api.getWatchLiveProgress(uid) * 5
                 if watched >= WATCH_TARGET:
-                    watch_list.remove(medal)
+                    # 安全删除已完成的观看任务
+                    if medal in watch_list:
+                        watch_list.remove(medal)
                     continue
                 if await self.api.get_medal_light_status(uid)==0:
                     await self.like_room(room_id, medal, times=36)
                     if await self.api.get_medal_light_status(uid)==0:
                         self.log.error(f"{medal['anchor_info']['nick_name']} 灯牌点亮失败，已将灯牌放至列表最后")
-                        watch_list.remove(medal)
-                        watch_list.append(medal)
+                        if medal in watch_list:
+                            watch_list.remove(medal)
+                            watch_list.append(medal)
                         await asyncio.sleep(0)
                         continue
                         
@@ -315,6 +318,13 @@ class BiliUser:
         
         while True:
             try:
+                # 检查session是否关闭，如果关闭则重连
+                if self.session.closed:
+                    self.log.warning(f"{name} 检测到session已关闭，重新创建连接")
+                    self.session = ClientSession(timeout=ClientTimeout(total=5), trust_env=True)
+                    from .api import BiliApi
+                    self.api = BiliApi(self, self.session)
+                
                 # 每分钟发送心跳，每5分钟检查一次进度
                 await self.api.heartbeat(room_id, target_id)
                 consecutive_failures = 0  # 重置连续失败计数
