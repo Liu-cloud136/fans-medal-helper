@@ -42,7 +42,7 @@ try:
     watch_target = users.get("WATCH_TARGET", 5)  # 新规：5次×5分钟=25分钟满亲密度
     watch_max_attempts = users.get("WATCH_MAX_ATTEMPTS", 10)  # 新规：大幅减少尝试次数
     wearmedal = users.get("WEARMEDAL", 0)
-    max_concurrent_watch = users.get("MAX_CONCURRENT_WATCH", 3)
+    max_concurrent_watch = users.get("MAX_CONCURRENT_WATCH", 6)
     notify_detail = users.get("NOTIFY_DETAIL", 1)
     
     assert like_cd >= 0, "LIKE_CD参数错误"

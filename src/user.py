@@ -555,8 +555,10 @@ class BiliUser:
                     pass
                 await asyncio.sleep(5)
                 await self._init_session()
-                await self.start()
-                return  # 结束旧循环
+                # 重新获取任务列表而不是递归调用start()
+                await self.get_medals()
+                current_day = now_day
+                continue  # 继续主循环而不是递归
 
             # 全部任务空闲且无后台观看，退出
             if not (self.like_list or self.watch_list or self._current_watch_tasks):

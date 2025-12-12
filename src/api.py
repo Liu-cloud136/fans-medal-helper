@@ -66,6 +66,8 @@ def retry(tries=60, interval=1):
                         if e.code == 1011040:
                             raise e
                         elif e.code == 10030:
+                            if count > tries // 6:  # 10030错误重试限制
+                                raise e
                             await asyncio.sleep(10)
                         elif e.code == -504:
                             pass
@@ -199,7 +201,7 @@ class BiliApi:
         async with self.session.get(url, params=params, headers=self.headers) as resp:
             data = await resp.json()
             if data["code"] != 0:
-                self.user.log.warning(f"获取直播状态失败: {data['message']}")
+                self.u.log.warning(f"获取直播状态失败: {data['message']}")
                 return 0  # 未开播
             return data["data"]["live_status"]  # 0=未开播, 1=直播, 2=轮播
 
