@@ -42,14 +42,12 @@ try:
     watch_target = users.get("WATCH_TARGET", 5)  # 新规：5次×5分钟=25分钟满亲密度
     watch_max_attempts = users.get("WATCH_MAX_ATTEMPTS", 10)  # 新规：大幅减少尝试次数
     wearmedal = users.get("WEARMEDAL", 0)
-    max_concurrent_watch = users.get("MAX_CONCURRENT_WATCH", 6)
     notify_detail = users.get("NOTIFY_DETAIL", 1)
     
     assert like_cd >= 0, "LIKE_CD参数错误"
     assert watch_target >= 0, "WATCH_TARGET参数错误"
     assert watch_max_attempts >= watch_target, "WATCH_MAX_ATTEMPTS参数错误，不能小于WATCH_TARGET"
     assert wearmedal in [0, 1], "WEARMEDAL参数错误"
-    assert max_concurrent_watch >= 1, "MAX_CONCURRENT_WATCH参数必须大于等于1"
     assert notify_detail in [0, 1], "NOTIFY_DETAIL参数错误，必须为0或1"
     
     config = {
@@ -57,7 +55,6 @@ try:
         "WATCH_TARGET": watch_target,
         "WATCH_MAX_ATTEMPTS": watch_max_attempts,
         "WEARMEDAL": wearmedal,
-        "MAX_CONCURRENT_WATCH": max_concurrent_watch,
         "NOTIFY_DETAIL": notify_detail,
         "PROXY": users.get("PROXY"),
         "API_RATE_LIMIT": users.get("API_RATE_LIMIT", 0.5),

@@ -91,7 +91,6 @@ class BiliUser:
         self.uuids = str(uuid.uuid4())
         self.session = None
         self.api = None
-        self._current_watch_tasks = []  # 存储所有并行的观看任务
         self._retry_info = {}
         
         # 添加API调用限流控制
@@ -421,30 +420,24 @@ class BiliUser:
 
             await asyncio.sleep(60)
     
-    async def _watch_task_wrapper(self, medal):
-        """ 在后台运行单个 watch_room，并在结束后根据返回值从 watch_list 中移除 medal。 """
+    async def watch_room_complete(self, medal):
+        """执行单个房间的观看任务直到完成"""
         name = medal["anchor_info"]["nick_name"]
         try:
             ok = await self.watch_room(medal)
             if ok:
-                # 如果 watch_room 成功，则把 medal 从 watch_list 中移除（若仍在列表中）
+                # 如果观看成功，则把 medal 从 watch_list 中移除
                 try:
                     self.watch_list.remove(medal)
                 except ValueError: # 已经被移除则忽略
                     pass
-        except asyncio.CancelledError:
-            self.log.info(f"{name} 的后台观看任务被取消")
-            raise
         except Exception as e:
-            self.log.warning(f"{name} 的后台观看任务出现异常: {e}")
-        finally:
-            # 从当前任务列表中移除自己
-            if medal in self._current_watch_tasks:
-                self._current_watch_tasks.remove(medal)
-            self.log.info(f"{name} 后台观看任务结束，当前并行观看任务数: {len(self._current_watch_tasks)}")
+            self.log.warning(f"{name} 的观看任务出现异常: {e}")
+            return False
+        return ok
 
     async def task_loop(self):
-        """按直播状态与用户类型执行点赞任务，观看任务作为独立后台任务运行"""
+        """按直播状态与用户类型执行点赞和观看任务，串行执行"""
         # 确保 retry state 已存在
         if not hasattr(self, "_retry_info"):
             self._retry_info = {}
@@ -452,8 +445,25 @@ class BiliUser:
         LOG_INTERVAL = 1800  # 重复日志间隔：30 分钟
         current_day = self._now_beijing().date()  # 记录初始日期
 
-        # ---------- 点赞子循环 ----------
-        async def like_loop():
+        # ---------- 主循环 ----------
+        while True:
+            # 跨天检测
+            now_day = self._now_beijing().date()
+            if now_day != current_day:
+                self.log.success(f"检测到北京时间已进入新的一天（{current_day} → {now_day}），正在重新执行任务……")
+                try:
+                    if self.session:
+                        await self.session.close()
+                except Exception:
+                    pass
+                await asyncio.sleep(5)
+                await self._init_session()
+                # 重新获取任务列表而不是递归调用start()
+                await self.get_medals()
+                current_day = now_day
+                continue  # 继续主循环而不是递归
+
+            # 点赞任务处理
             while self.like_list:
                 now = time.time()
 
@@ -518,91 +528,32 @@ class BiliUser:
 
                 await asyncio.sleep(2)
 
-        # ---------- 观看管理子循环 ----------
-        async def watch_manager_loop():
-            MAX_CONCURRENT_WATCH = self.config.get("MAX_CONCURRENT_WATCH", 6)  # 新规：增加并发数提高效率
-            
-            while self.watch_list or self._current_watch_tasks:
-                # 清理已完成的任务
-                self._current_watch_tasks = [task for task in self._current_watch_tasks if task in self.watch_list]
-                
-                # 启动新的观看任务
-                while len(self._current_watch_tasks) < MAX_CONCURRENT_WATCH and self.watch_list:
-                    try:
-                        watch_medal = await self.get_next_watchable(self.watch_list)
-                    except Exception as e:
-                        self.log.warning(f"选择可观看房间时出错: {e}")
-                        break
-
-                    if watch_medal and watch_medal not in self._current_watch_tasks:
-                        self._current_watch_tasks.append(watch_medal)
-                        self.log.info(f"启动并行观看任务: {watch_medal['anchor_info']['nick_name']} (room: {watch_medal['room_info']['room_id']})，当前并行数: {len(self._current_watch_tasks)}/{MAX_CONCURRENT_WATCH}")
-                        asyncio.create_task(self._watch_task_wrapper(watch_medal))
-                    elif not watch_medal:
-                        break
-
-                await asyncio.sleep(10)
-
-        # ---------- 主循环 ----------
-        while True:
-            # 跨天检测
-            now_day = self._now_beijing().date()
-            if now_day != current_day:
-                self.log.success(f"检测到北京时间已进入新的一天（{current_day} → {now_day}），正在重新执行任务……")
+            # 观看任务处理（串行执行）
+            while self.watch_list:
                 try:
-                    if self.session:
-                        await self.session.close()
-                except Exception:
-                    pass
-                await asyncio.sleep(5)
-                await self._init_session()
-                # 重新获取任务列表而不是递归调用start()
-                await self.get_medals()
-                current_day = now_day
-                continue  # 继续主循环而不是递归
+                    watch_medal = await self.get_next_watchable(self.watch_list)
+                except Exception as e:
+                    self.log.warning(f"选择可观看房间时出错: {e}")
+                    break
 
-            # 全部任务空闲且无后台观看，退出
-            if not (self.like_list or self.watch_list or self._current_watch_tasks):
+                if not watch_medal:
+                    break
+
+                name = watch_medal["anchor_info"]["nick_name"]
+                self.log.info(f"开始观看任务: {name} (room: {watch_medal['room_info']['room_id']})")
+                await self.watch_room_complete(watch_medal)
+
+            # 全部任务空闲，退出
+            if not (self.like_list or self.watch_list):
                 break
 
-            # 启动子任务（如果尚未启动）
-            if not hasattr(self, "_like_task") or self._like_task.done():
-                self._like_task = asyncio.create_task(like_loop())
-            if not hasattr(self, "_watch_manager_task") or self._watch_manager_task.done():
-                self._watch_manager_task = asyncio.create_task(watch_manager_loop())
-
             await asyncio.sleep(5)
-
-        # 退出前取消子任务
-        for tname in ("_like_task", "_watch_manager_task"):
-            task = getattr(self, tname, None)
-            if task and not task.done():
-                task.cancel()
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    pass
 
         self.log.info("所有任务处理完成或已无可执行任务，task_loop 退出。")
 
     async def cleanup(self):
         """清理资源"""
         try:
-            # 取消所有观看任务
-            for task in self._current_watch_tasks:
-                if hasattr(task, 'cancel'):
-                    task.cancel()
-            
-            # 取消子任务
-            for tname in ("_like_task", "_watch_manager_task"):
-                task = getattr(self, tname, None)
-                if task and not task.done():
-                    task.cancel()
-                    try:
-                        await task
-                    except asyncio.CancelledError:
-                        pass
-            
             # 关闭session
             if self.session and not self.session.closed:
                 await self.session.close()
