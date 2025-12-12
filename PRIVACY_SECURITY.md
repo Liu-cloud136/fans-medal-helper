@@ -77,6 +77,7 @@
 
 ```bash
 # B站API密钥（必需）
+export BILI_APPKEY="4409e2ce8ffd12b8"
 export BILI_APPSECRET="59b43e04ad6965f34319062b478f83dd"
 export BILI_SECRET_KEY="axoaadsffcazxksectbbb"
 
@@ -122,8 +123,9 @@ export BILI_SECRET_KEY="your_secret_key_here"
 
 ### 获取密钥值：
 
-1. **BILI_APPSECRET**: `59b43e04ad6965f34319062b478f83dd`
-2. **BILI_SECRET_KEY**: `axoaadsffcazxksectbbb`
+1. **BILI_APPKEY**: `4409e2ce8ffd12b8`
+2. **BILI_APPSECRET**: `59b43e04ad6965f34319062b478f83dd`
+3. **BILI_SECRET_KEY**: `axoaadsffcazxksectbbb`
 
 这些是B站APP的固定密钥，不属于个人隐私信息，但仍建议通过环境变量设置以提高安全性。
 
