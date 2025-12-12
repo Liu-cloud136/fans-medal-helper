@@ -1,5 +1,5 @@
-# Python
 __pycache__/
+# Python
 *.py[cod]
 *$py.class
 *.so
@@ -20,55 +20,33 @@ wheels/
 .installed.cfg
 *.egg
 
-# 日志目录 (包含access_key和用户行为数据)
+# 日志目录
 logs/
 *.log
-task_log_*.json
 
-# 配置文件 (包含敏感信息)
+# 配置文件
 users.yaml
-*.yaml.bak
-*.yml.bak
 login_info.txt
-.env
-.env.local
-.env.production
 
 # 临时文件
 *.tmp
 *.swp
 *~
-*.bak
 
 # 虚拟环境
 .venv/
 venv/
-env/
 
 # IDE
 .idea/
 .vscode/
-*.sublime-*
 
 # 系统文件
 .DS_Store
 Thumbs.db
-desktop.ini
 
-# 其他敏感文件
-*.key
-*.pem
-*.crt
-config.py
-secrets.txt
-credentials.txt
-
-# 测试文件
+# 其他
+*.exe
 test.py
 go.mod
 go.sum
-
-# 备份文件
-*.old
-*.orig
-*.backup

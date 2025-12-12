@@ -18,7 +18,7 @@ from .exceptions import OnePushException
 
 # log = logging.getLogger('onepush')
 
-log = logger
+log = None
 
 
 class Provider(object):

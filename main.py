@@ -13,7 +13,6 @@ import asyncio
 import aiohttp
 from datetime import datetime
 from src import BiliUser
-import yaml
 
 
 log = logger.bind(user="B站粉丝牌助手")
@@ -28,6 +27,8 @@ try:
     if os.environ.get("USERS"):
         users = json.loads(os.environ.get("USERS"))
     else:
+        import yaml
+
         with open("users.yaml", "r", encoding="utf-8") as f:
             users = yaml.safe_load(f)
     
