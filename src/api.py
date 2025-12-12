@@ -19,7 +19,8 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 class Crypto:
     APPKEY = "4409e2ce8ffd12b8"
-    APPSECRET = "59b43e04ad6965f34319062b478f83dd"
+    # 注意：APPSECRET应该从环境变量或配置文件获取，不要硬编码
+    APPSECRET = os.environ.get("BILI_APPSECRET", "59b43e04ad6965f34319062b478f83dd")
 
     @staticmethod
     def md5(data: Union[str, bytes]) -> str:
@@ -199,7 +200,7 @@ class BiliApi:
         async with self.session.get(url, params=params, headers=self.headers) as resp:
             data = await resp.json()
             if data["code"] != 0:
-                self.user.log.warning(f"获取直播状态失败: {data['message']}")
+                self.u.log.warning(f"获取直播状态失败: {data['message']}")
                 return 0  # 未开播
             return data["data"]["live_status"]  # 0=未开播, 1=直播, 2=轮播
 
@@ -272,7 +273,7 @@ class BiliApi:
             "parent_id": "6",
             "area_id": "283",
             "timestamp": f"{int(time.time())-60}",
-            "secret_key": "axoaadsffcazxksectbbb",
+            "secret_key": os.environ.get("BILI_SECRET_KEY", "axoaadsffcazxksectbbb"),
             "watch_time": "60",
             "up_id": f"{up_id}",
             "up_level": "40",
@@ -321,7 +322,7 @@ class BiliApi:
     #         'parent_id': '6',
     #         'area_id': '283',
     #         'timestamp': f'{int(time.time())-60}',
-    #         'secret_key': 'axoaadsffcazxksectbbb',
+    #         'secret_key': os.environ.get("BILI_SECRET_KEY", "axoaadsffcazxksectbbb"),
     #         'watch_time': '60',
     #         'up_id': f'{up_id}',
     #         'up_level': '40',
