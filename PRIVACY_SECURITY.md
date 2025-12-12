@@ -71,24 +71,61 @@
 - [ ] 日志目录已忽略 (`logs/`)
 - [ ] 临时文件已忽略 (`*.log`, `*.tmp`)
 
-## 🔧 环境变量配置（推荐）
+## 🔧 环境变量配置（必需）
 
-为了更高的安全性，可以通过环境变量设置密钥：
+出于安全考虑，项目现在**必须**通过环境变量设置密钥，不再支持硬编码：
 
 ```bash
-# B站API密钥
-export BILI_APPSECRET="your_appsecret_here"
-export BILI_SECRET_KEY="your_secret_key_here"
+# B站API密钥（必需）
+export BILI_APPSECRET="59b43e04ad6965f34319062b478f83dd"
+export BILI_SECRET_KEY="axoaadsffcazxksectbbb"
 
-# 推送服务密钥
+# 推送服务密钥（可选）
 export SERVERCHAN_SENDKEY="your_sendkey_here"
 ```
 
-然后在 `users.yaml` 中使用环境变量：
+### 在不同环境中设置：
 
-```yaml
-SENDKEY: "${SERVERCHAN_SENDKEY}"
+**Linux/MacOS:**
+```bash
+# 临时设置（当前会话）
+export BILI_APPSECRET="your_appsecret_here"
+
+# 永久设置（添加到 ~/.bashrc 或 ~/.zshrc）
+echo 'export BILI_APPSECRET="your_appsecret_here"' >> ~/.bashrc
+source ~/.bashrc
 ```
+
+**Windows:**
+```cmd
+# 临时设置
+set BILI_APPSECRET="your_appsecret_here"
+
+# 永久设置（系统环境变量）
+setx BILI_APPSECRET "your_appsecret_here"
+```
+
+**Docker:**
+```yaml
+# docker-compose.yml
+environment:
+  - BILI_APPSECRET=your_appsecret_here
+  - BILI_SECRET_KEY=your_secret_key_here
+```
+
+**青龙面板:**
+```bash
+# 在脚本开始前添加
+export BILI_APPSECRET="your_appsecret_here"
+export BILI_SECRET_KEY="your_secret_key_here"
+```
+
+### 获取密钥值：
+
+1. **BILI_APPSECRET**: `59b43e04ad6965f34319062b478f83dd`
+2. **BILI_SECRET_KEY**: `axoaadsffcazxksectbbb`
+
+这些是B站APP的固定密钥，不属于个人隐私信息，但仍建议通过环境变量设置以提高安全性。
 
 ## 🚨 如果意外泄露
 

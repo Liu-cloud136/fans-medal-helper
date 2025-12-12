@@ -19,8 +19,17 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 class Crypto:
     APPKEY = "4409e2ce8ffd12b8"
-    # 注意：APPSECRET应该从环境变量或配置文件获取，不要硬编码
-    APPSECRET = os.environ.get("BILI_APPSECRET", "59b43e04ad6965f34319062b478f83dd")
+    # 注意：APPSECRET必须从环境变量获取，不要硬编码
+    APPSECRET = os.environ.get("BILI_APPSECRET")
+    
+    @staticmethod
+    def _validate_secret():
+        """验证密钥是否正确设置"""
+        if not Crypto.APPSECRET:
+            raise ValueError("未设置环境变量 BILI_APPSECRET，请正确配置后再运行")
+        if len(Crypto.APPSECRET) != 32:
+            raise ValueError("BILI_APPSECRET 长度不正确，请检查配置")
+        return True
 
     @staticmethod
     def md5(data: Union[str, bytes]) -> str:
@@ -32,6 +41,8 @@ class Crypto:
     @staticmethod
     def sign(data: Union[str, dict]) -> str:
         """salted sign funtion for `dict`(converts to qs then parse) & `str`"""
+        Crypto._validate_secret()  # 验证密钥是否设置
+        
         if isinstance(data, dict):
             _str = urlencode(data)
         elif type(data) != str:
@@ -273,7 +284,7 @@ class BiliApi:
             "parent_id": "6",
             "area_id": "283",
             "timestamp": f"{int(time.time())-60}",
-            "secret_key": os.environ.get("BILI_SECRET_KEY", "axoaadsffcazxksectbbb"),
+            "secret_key": os.environ.get("BILI_SECRET_KEY"),
             "watch_time": "60",
             "up_id": f"{up_id}",
             "up_level": "40",
@@ -322,7 +333,7 @@ class BiliApi:
     #         'parent_id': '6',
     #         'area_id': '283',
     #         'timestamp': f'{int(time.time())-60}',
-    #         'secret_key': os.environ.get("BILI_SECRET_KEY", "axoaadsffcazxksectbbb"),
+    #         'secret_key': os.environ.get("BILI_SECRET_KEY"),
     #         'watch_time': '60',
     #         'up_id': f'{up_id}',
     #         'up_level': '40',

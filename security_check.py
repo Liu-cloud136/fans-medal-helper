@@ -22,6 +22,8 @@ def check_file_sensitive(filepath):
         r'api_key\s*:\s*["\']?[a-zA-Z0-9]{20,}["\']?',     # API密钥
         r'sk_[a-zA-Z0-9]{20,}',                              # Stripe等sk_开头的密钥
         r'[a-zA-Z0-9]{32,}',                                # 32位以上的长字符串
+        r'APPSECRET\s*=\s*["\']?[a-zA-Z0-9]{32,}["\']?',   # 硬编码的APPSECRET
+        r'os\.environ\.get\(".*?",\s*["\']?[a-zA-Z0-9]{20,}["\']?\)',  # 带默认值的环境变量
     ]
     
     issues = []
