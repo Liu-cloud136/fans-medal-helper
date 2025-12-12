@@ -309,7 +309,8 @@ class BiliUser:
             if success_count == times:
                 self.message.append(f"👍 {name}: 点赞 {success_count}/{times} 次全部成功")
             else:
-                self.errmsg.append(f"⚠️ {name}: 点赞仅完成 {success_count}/{times} 次")
+                success_rate = (success_count / times) * 100 if times > 0 else 0
+                self.errmsg.append(f"⚠️ {name}: 点赞仅完成 {success_count}/{times} 次 ({success_rate:.0f}%)")
         
         return success_count
 
@@ -632,20 +633,22 @@ class BiliUser:
                 await self.session.close()
             return
 
-        self.log.info(f"开始执行任务：")
+        self.log.info(f"🚀 开始执行任务：")
 
         # 循环执行点赞→观看
         await self.task_loop()
 
-        self.log.success("所有任务执行完成")
+        self.log.success("🎉 所有任务执行完成")
         if self.session:
             await self.session.close()
         
         # 收集执行结果用于通知
         if self.config.get("NOTIFY_DETAIL", 1):
-            self.message.append("✅ 任务执行完成")
-            if self.medals:
-                self.message.append(f"📊 处理粉丝牌: {len(self.medals)}个")
+            if not self.medals:
+                self.message.append("ℹ️  没有可执行任务的粉丝牌")
+            else:
+                self.message.append("✅ 任务执行完成")
+                self.message.append(f"🎖️  处理粉丝牌: {len(self.medals)}个")
                 # 获取当日完成的任务统计
                 today = self._now_beijing().strftime("%Y-%m-%d")
                 logs = self._load_log().get(today, {})
@@ -653,5 +656,7 @@ class BiliUser:
                 like_count = len(logs.get("like", []))
                 watch_completed = sum(1 for medal in self.medals if medal["medal"]["target_id"] not in self.watch_list)
                 
-                self.message.append(f"👍 点赞完成: {like_count}个房间")
-                self.message.append(f"👁️  观看完成: {watch_completed}个房间")
+                if like_count > 0:
+                    self.message.append(f"👍 点赞完成: {like_count}个房间")
+                if watch_completed > 0:
+                    self.message.append(f"👁️  观看完成: {watch_completed}个房间")

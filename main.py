@@ -108,27 +108,132 @@ async def main():
                 await biliUser.cleanup()
             except Exception as e:
                 log.warning(f"清理用户 {biliUser.name} 资源时出错: {e}")
+        
+        # 构建人性化的通知消息
         success_count = 0
         error_count = 0
+        total_like_success = 0
+        total_like_attempts = 0
+        total_watch_completed = 0
+        total_watch_time = 0
+        
+        # 构建详细的用户结果报告
+        user_reports = []
         
         for biliUser in biliUsers:
+            user_report = f"\n👤 {biliUser.name}"
+            
             if biliUser.errmsg:
                 error_count += 1
-                messageList.extend([f"👤 {biliUser.name} 错误信息:"] + biliUser.errmsg)
+                user_report += "\n❌ 执行状态: 失败"
+                for msg in biliUser.errmsg:
+                    # 美化错误消息格式
+                    if "登录失败" in msg:
+                        user_report += f"\n   🔐 {msg.replace('❌ ', '')}"
+                    elif "点赞仅完成" in msg:
+                        user_report += f"\n   👍 {msg.replace('⚠️ ', '')}"
+                    elif "观看超时" in msg or "观看连续失败" in msg:
+                        user_report += f"\n   👁️  {msg.replace('⚠️ ', '').replace('❌ ', '')}"
+                    else:
+                        user_report += f"\n   ⚠️ {msg}"
+                        
             elif biliUser.message:
                 success_count += 1
-                messageList.extend([f"👤 {biliUser.name} 执行结果:"] + biliUser.message)
+                user_report += "\n✅ 执行状态: 成功"
+                
+                # 统计用户数据
+                user_like_success = 0
+                user_like_attempts = 0
+                user_watch_time = 0
+                user_watch_rooms = 0
+                
+                for msg in biliUser.message:
+                    if "点赞" in msg and "成功" in msg:
+                        # 解析点赞消息 "👍 名字: 点赞 5/5 次全部成功"
+                        if "全部成功" in msg:
+                            parts = msg.split(":")
+                            if len(parts) > 1:
+                                like_part = parts[1].strip()
+                                if "点赞" in like_part:
+                                    numbers = like_part.split("点赞")[1].strip().split(" ")[0]
+                                    if "/" in numbers:
+                                        success, total = numbers.split("/")
+                                        user_like_success += int(success)
+                                        user_like_attempts += int(total)
+                    elif "观看" in msg and "分钟" in msg and "✅" in msg:
+                        # 解析观看消息 "👁️  名字: 观看 25 分钟 ✅"
+                        if "分钟" in msg:
+                            minutes = msg.split("观看")[1].split("分钟")[0].strip()
+                            try:
+                                user_watch_time += int(minutes)
+                                user_watch_rooms += 1
+                            except ValueError:
+                                pass
+                
+                # 添加用户统计
+                if user_like_attempts > 0:
+                    success_rate = (user_like_success / user_like_attempts) * 100
+                    user_report += f"\n   📊 点赞任务: {user_like_success}/{user_like_attempts} ({success_rate:.1f}%)"
+                    total_like_success += user_like_success
+                    total_like_attempts += user_like_attempts
+                
+                if user_watch_rooms > 0:
+                    user_report += f"\n   ⏱️  观看任务: {user_watch_rooms}个房间, 共{user_watch_time}分钟"
+                    total_watch_completed += user_watch_rooms
+                    total_watch_time += user_watch_time
+                
+                # 添加其他消息
+                for msg in biliUser.message:
+                    if "处理粉丝牌" in msg:
+                        user_report += f"\n   🎖️  {msg.replace('📊 ', '')}"
+                    elif "没有可执行任务的粉丝牌" in msg:
+                        user_report += f"\n   ℹ️  {msg.replace('ℹ️ ', '')}"
+                    elif "任务执行完成" in msg:
+                        continue  # 这个消息我们已经在上面处理了
+            
+            user_reports.append(user_report)
         
-        # 添加总体统计
-        if success_count > 0 or error_count > 0:
-            messageList.insert(0, f"📋 执行汇总: 成功 {success_count} 个用户，失败 {error_count} 个用户")
-            messageList.append(f"⏰ 执行时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        # 构建最终消息
+        if user_reports:
+            messageList.append("🎯 B站粉丝牌助手 - 执行报告")
+            messageList.append("=" * 40)
+            
+            # 总体统计
+            total_users = len(biliUsers)
+            messageList.append(f"📈 执行概况: 成功 {success_count}/{total_users} 个用户")
+            
+            if error_count > 0:
+                messageList.append(f"⚠️  失败用户: {error_count} 个")
+            
+            # 添加总体任务统计
+            if total_like_attempts > 0:
+                like_success_rate = (total_like_success / total_like_attempts) * 100
+                messageList.append(f"👍 总体点赞: {total_like_success}/{total_like_attempts} ({like_success_rate:.1f}%)")
+            
+            if total_watch_completed > 0:
+                messageList.append(f"👁️  总体观看: {total_watch_completed}个房间, 共{total_watch_time}分钟")
+            
+            # 添加详细用户报告
+            messageList.append("\n📋 详细报告:")
+            messageList.extend(user_reports)
+            
+            # 添加执行时间
+            now = datetime.now()
+            messageList.append(f"\n⏰ 完成时间: {now.strftime('%Y年%m月%d日 %H:%M:%S')}")
+            
+            # 添加友好的结束语
+            if success_count == total_users:
+                messageList.append("\n🎉 所有任务执行完成！明天见~")
+            elif success_count > 0:
+                messageList.append(f"\n💪 部分任务完成，继续努力！")
+            else:
+                messageList.append(f"\n😢 今天有点小问题，明天再试试吧~")
 
         # ------------------------------
         # 消息推送
         # ------------------------------
         if messageList:
-            # 格式化消息内容
+            # 格式化消息内容，使用更友好的格式
             formatted_message = "\n".join(messageList)
             log.info(f"准备推送通知内容:\n{formatted_message}")
             
