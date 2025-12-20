@@ -264,7 +264,7 @@ class BiliUser:
             if watch_cd:
                 try:
                     watched = await self.api.getWatchLiveProgress(uid) * 5
-                    if watched < WATCH_TARGET:
+                    if watched < WATCH_TARGET * 5:  # 修正：将次数转换为分钟数
                         self.watch_list.append(medal)
                 except Exception as e:
                     self.log.warning(f"{medal['anchor_info']['nick_name']} 获取直播状态失败: {e}")
@@ -316,7 +316,7 @@ class BiliUser:
     # ------------------------- 观看任务 -------------------------
     async def get_next_watchable(self, watch_list):
         """返回列表中最靠前的可观看房间（观看时长未达到25 min）"""
-        WATCH_TARGET = self.config.get("WATCH_TARGET", 5)  # 新规：默认5次即可完成
+        WATCH_TARGET = self.config.get("WATCH_TARGET", 5) * 5  # 修正：将次数转换为分钟数
         for medal in watch_list.copy():
             uid = medal["medal"]["target_id"]
             room_id = medal["room_info"]["room_id"]
@@ -353,7 +353,7 @@ class BiliUser:
         target_id = medal["medal"]["target_id"]
 
         WATCH_TARGET = self.config.get("WATCH_TARGET", 5)  # 新规：默认5次即可完成
-        MAX_ATTEMPTS = self.config.get("WATCH_MAX_ATTEMPTS", 10)  # 新规：减少尝试次数
+        MAX_ATTEMPTS = self.config.get("WATCH_MAX_ATTEMPTS", 10) * 5  # 修正：将尝试次数转换为分钟数
         attempts = 0
         consecutive_failures = 0
         MAX_CONSECUTIVE_FAILURES = 3
