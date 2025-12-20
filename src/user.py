@@ -246,7 +246,7 @@ class BiliUser:
 
         today = self._now_beijing().strftime("%Y-%m-%d")
         logs = self._load_log().get(today, {})
-        WATCH_TARGET = self.config.get("WATCH_TARGET", 5)  # 新规：默认5次即可完成
+        WATCH_TARGET = self.config.get("WATCH_TARGET", 5) * 5  # 修正：将次数转换为分钟数
 
         for medal in self.medals:
             uid = medal["medal"]["target_id"]
@@ -352,7 +352,7 @@ class BiliUser:
         name = medal["anchor_info"]["nick_name"]
         target_id = medal["medal"]["target_id"]
 
-        WATCH_TARGET = self.config.get("WATCH_TARGET", 5)  # 新规：默认5次即可完成
+        WATCH_TARGET = self.config.get("WATCH_TARGET", 5) * 5  # 修正：将次数转换为分钟数
         MAX_ATTEMPTS = self.config.get("WATCH_MAX_ATTEMPTS", 10) * 5  # 修正：将尝试次数转换为分钟数
         attempts = 0
         consecutive_failures = 0
