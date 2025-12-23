@@ -50,3 +50,6 @@ Thumbs.db
 test.py
 go.mod
 go.sum
+
+# 自动生成的日志文件
+src/task_log_*.json

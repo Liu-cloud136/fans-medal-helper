@@ -246,7 +246,7 @@ class BiliUser:
 
         today = self._now_beijing().strftime("%Y-%m-%d")
         logs = self._load_log().get(today, {})
-        WATCH_TARGET = self.config.get("WATCH_TARGET", 5) * 5  # 修正：将次数转换为分钟数
+        WATCH_TARGET = self.config.get("WATCH_TARGET", 5)  # 目标观看次数
 
         for medal in self.medals:
             uid = medal["medal"]["target_id"]
@@ -263,8 +263,8 @@ class BiliUser:
             # 观看任务
             if watch_cd:
                 try:
-                    watched = await self.api.getWatchLiveProgress(uid) * 5
-                    if watched < WATCH_TARGET * 5:  # 修正：将次数转换为分钟数
+                    watched_times = await self.api.getWatchLiveProgress(uid)  # 获取观看次数
+                    if watched_times < WATCH_TARGET:  # 比较观看次数
                         self.watch_list.append(medal)
                 except Exception as e:
                     self.log.warning(f"{medal['anchor_info']['nick_name']} 获取直播状态失败: {e}")
@@ -315,15 +315,15 @@ class BiliUser:
 
     # ------------------------- 观看任务 -------------------------
     async def get_next_watchable(self, watch_list):
-        """返回列表中最靠前的可观看房间（观看时长未达到25 min）"""
-        WATCH_TARGET = self.config.get("WATCH_TARGET", 5) * 5  # 修正：将次数转换为分钟数
+        """返回列表中最靠前的可观看房间（观看次数未达到目标）"""
+        WATCH_TARGET = self.config.get("WATCH_TARGET", 5)  # 目标观看次数
         for medal in watch_list.copy():
             uid = medal["medal"]["target_id"]
             room_id = medal["room_info"]["room_id"]
 
             try:
-                watched = await self.api.getWatchLiveProgress(uid) * 5
-                if watched >= WATCH_TARGET:
+                watched_times = await self.api.getWatchLiveProgress(uid)  # 获取观看次数
+                if watched_times >= WATCH_TARGET:
                     # 安全删除已完成的观看任务
                     if medal in watch_list:
                         watch_list.remove(medal)
@@ -352,18 +352,19 @@ class BiliUser:
         name = medal["anchor_info"]["nick_name"]
         target_id = medal["medal"]["target_id"]
 
-        WATCH_TARGET = self.config.get("WATCH_TARGET", 5) * 5  # 修正：将次数转换为分钟数
-        MAX_ATTEMPTS = self.config.get("WATCH_MAX_ATTEMPTS", 10) * 5  # 修正：将尝试次数转换为分钟数
+        WATCH_TARGET = self.config.get("WATCH_TARGET", 5)  # 目标观看次数（每次5分钟）
+        MAX_ATTEMPTS = self.config.get("WATCH_MAX_ATTEMPTS", 10) * 5  # 最大尝试分钟数
         attempts = 0
         consecutive_failures = 0
         MAX_CONSECUTIVE_FAILURES = 3
         
         try:
-            watched = await self.api.getWatchLiveProgress(target_id) * 5
+            watched_times = await self.api.getWatchLiveProgress(target_id)  # 获取观看次数
+            watched_minutes = watched_times * 5  # 转换为分钟数
         except Exception as e:
             self.log.warning(f"{name} 获取观看进度失败: {e}")
             return False
-        self.log.info(f"{name} 开始执行观看任务，还需{WATCH_TARGET-watched}分钟有效观看时长")
+        self.log.info(f"{name} 开始执行观看任务，还需{WATCH_TARGET-watched_times}次（{WATCH_TARGET*5-watched_minutes}分钟）有效观看时长")
         
         while True:
             try:
@@ -379,13 +380,14 @@ class BiliUser:
                 attempts += 1
                 if attempts % 5 == 0:  # 每5分钟检查一次进度
                     try:
-                        watched = await self._limited_api_call(self.api.getWatchLiveProgress, target_id) * 5
-                        self.log.info(f"{name} 当前观看进度: {watched}/{WATCH_TARGET} 分钟")
+                        watched_times = await self._limited_api_call(self.api.getWatchLiveProgress, target_id)  # 获取观看次数
+                        watched_minutes = watched_times * 5  # 转换为分钟数
+                        self.log.info(f"{name} 当前观看进度: {watched_times}/{WATCH_TARGET} 次（{watched_minutes}/{WATCH_TARGET*5} 分钟）")
                         
-                        if watched >= WATCH_TARGET:
-                            self.log.success(f"{name} 已观看 {watched} 分钟，任务完成")
+                        if watched_times >= WATCH_TARGET:
+                            self.log.success(f"{name} 已观看 {watched_times} 次（{watched_minutes} 分钟），任务完成")
                             if self.config.get("NOTIFY_DETAIL", 1):
-                                self.message.append(f"👁️  {name}: 观看 {watched} 分钟 ✅")
+                                self.message.append(f"👁️  {name}: 观看 {watched_times} 次（{watched_minutes} 分钟）✅")
                             return True
                     except Exception as e:
                         self.log.warning(f"{name} 获取观看进度失败: {e}")
@@ -393,6 +395,18 @@ class BiliUser:
                         
                 # 检查是否超过最大尝试次数
                 if attempts >= MAX_ATTEMPTS:
+                    # 在判断超时前，先检查当前观看进度
+                    try:
+                        final_watched = await self._limited_api_call(self.api.getWatchLiveProgress, target_id) * 5
+                        if final_watched >= WATCH_TARGET:
+                            self.log.success(f"{name} 已观看 {final_watched} 分钟，任务完成")
+                            if self.config.get("NOTIFY_DETAIL", 1):
+                                self.message.append(f"👁️  {name}: 观看 {final_watched} 分钟 ✅")
+                            return True
+                    except Exception as e:
+                        self.log.warning(f"{name} 获取最终观看进度失败: {e}")
+                    
+                    # 如果确实超时了
                     self.log.error(f"{name} 超过最大尝试 {MAX_ATTEMPTS} 分钟，停止观看。该灯牌被放至观看队列最后。")
                     if self.config.get("NOTIFY_DETAIL", 1):
                         self.errmsg.append(f"⚠️ {name}: 观看超时，已观看 {attempts}/{MAX_ATTEMPTS} 分钟")
