@@ -144,6 +144,9 @@ async def main():
                 user_watch_time = 0
                 user_watch_rooms = 0
                 
+                # 用于去重统计的房间集合
+                watched_rooms = set()
+                
                 for msg in biliUser.message:
                     if "点赞" in msg and "成功" in msg:
                         # 解析点赞消息 "👍 名字: 点赞 5/5 次全部成功"
@@ -157,15 +160,43 @@ async def main():
                                         success, total = numbers.split("/")
                                         user_like_success += int(success)
                                         user_like_attempts += int(total)
-                    elif "观看" in msg and "分钟" in msg and "✅" in msg:
-                        # 解析观看消息 "👁️  名字: 观看 25 分钟 ✅"
-                        if "分钟" in msg:
-                            minutes = msg.split("观看")[1].split("分钟")[0].strip()
-                            try:
-                                user_watch_time += int(minutes)
-                                user_watch_rooms += 1
-                            except ValueError:
-                                pass
+                    elif "观看" in msg and ("分钟" in msg or "次" in msg) and "✅" in msg:
+                        # 提取房间名
+                        room_name = msg.split(":")[0].replace("👁️  ", "").strip()
+                        
+                        # 去重统计：每个房间只统计一次
+                        if room_name not in watched_rooms:
+                            watched_rooms.add(room_name)
+                            
+                            # 解析观看消息 "👁️  名字: 观看 25 分钟 ✅" 或 "👁️  名字: 观看 5 次（25 分钟）✅"
+                            if "分钟" in msg:
+                                # 处理分钟格式
+                                minutes_part = msg.split("观看")[1].split("分钟")[0].strip()
+                                # 处理可能包含次数的情况，如 "5 次（25 分钟）"
+                                if "次" in minutes_part:
+                                    times_part = minutes_part.split("次")[0].strip()
+                                    minutes = int(times_part) * 5  # 每次观看5分钟
+                                else:
+                                    try:
+                                        minutes = int(minutes_part)
+                                    except ValueError:
+                                        continue
+                                
+                                try:
+                                    user_watch_time += minutes
+                                    user_watch_rooms += 1
+                                except ValueError:
+                                    pass
+                            elif "次" in msg:
+                                # 处理次数格式 "👁️  名字: 观看 5 次（25 分钟）✅"
+                                times_part = msg.split("观看")[1].split("次")[0].strip()
+                                try:
+                                    times = int(times_part)
+                                    minutes = times * 5  # 每次观看5分钟
+                                    user_watch_time += minutes
+                                    user_watch_rooms += 1
+                                except ValueError:
+                                    pass
                 
                 # 添加用户统计
                 if user_like_attempts > 0:
