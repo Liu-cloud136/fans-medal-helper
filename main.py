@@ -7,6 +7,7 @@ if sys.version_info < MIN_PYTHON:
 
 import json
 import os
+import io
 from loguru import logger
 import warnings
 import asyncio
@@ -14,6 +15,18 @@ import aiohttp
 from datetime import datetime
 from src import BiliUser
 
+# 配置 Loguru 输出格式（支持 {user} 占位符和 emoji）
+logger.configure(
+    handlers=[{
+        "sink": sys.stdout,
+        "format": "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{extra[user]}</cyan>: <level>{message}</level>",
+        "colorize": True,
+        "level": "INFO",
+        "backtrace": True,
+        "diagnose": False,
+        "enqueue": False,
+    }]
+)
 
 log = logger.bind(user="B站粉丝牌助手")
 
@@ -38,23 +51,17 @@ try:
         exit(1)
     
     # 参数验证，使用安全的get方法
-    like_cd = users.get("LIKE_CD", 0.3)
     watch_target = users.get("WATCH_TARGET", 5)  # 新规：5次×5分钟=25分钟满亲密度
     watch_max_attempts = users.get("WATCH_MAX_ATTEMPTS", 10)  # 新规：大幅减少尝试次数
-    wearmedal = users.get("WEARMEDAL", 0)
     notify_detail = users.get("NOTIFY_DETAIL", 1)
     
-    assert like_cd >= 0, "LIKE_CD参数错误"
     assert watch_target >= 0, "WATCH_TARGET参数错误"
     assert watch_max_attempts >= watch_target, "WATCH_MAX_ATTEMPTS参数错误，不能小于WATCH_TARGET"
-    assert wearmedal in [0, 1], "WEARMEDAL参数错误"
     assert notify_detail in [0, 1], "NOTIFY_DETAIL参数错误，必须为0或1"
     
     config = {
-        "LIKE_CD": like_cd,
         "WATCH_TARGET": watch_target,
         "WATCH_MAX_ATTEMPTS": watch_max_attempts,
-        "WEARMEDAL": wearmedal,
         "NOTIFY_DETAIL": notify_detail,
         "PROXY": users.get("PROXY"),
         "API_RATE_LIMIT": users.get("API_RATE_LIMIT", 0.5),
@@ -82,6 +89,8 @@ async def main():
                     user.get("white_uid", ""),
                     user.get("banned_uid", ""),
                     config,
+                    session=None,  # 每个用户使用独立的 session（在 BiliUser 内部创建）
+                    cookie=user.get("cookie", None),  # 可选：users.yaml 为该用户配置 cookie 字符串
                 )
                 biliUsers.append(biliUser)
                 startTasks.append(biliUser.start())  # ✅ 新逻辑入口
@@ -109,8 +118,6 @@ async def main():
         # 构建人性化的通知消息
         success_count = 0
         error_count = 0
-        total_like_success = 0
-        total_like_attempts = 0
         total_watch_completed = 0
         total_watch_time = 0
         
@@ -127,8 +134,6 @@ async def main():
                     # 美化错误消息格式
                     if "登录失败" in msg:
                         user_report += f"\n   🔐 {msg.replace('❌ ', '')}"
-                    elif "点赞仅完成" in msg:
-                        user_report += f"\n   👍 {msg.replace('⚠️ ', '')}"
                     elif "观看超时" in msg or "观看连续失败" in msg:
                         user_report += f"\n   👁️  {msg.replace('⚠️ ', '').replace('❌ ', '')}"
                     else:
@@ -139,8 +144,6 @@ async def main():
                 user_report += "\n✅ 执行状态: 成功"
                 
                 # 统计用户数据
-                user_like_success = 0
-                user_like_attempts = 0
                 user_watch_time = 0
                 user_watch_rooms = 0
                 
@@ -148,19 +151,7 @@ async def main():
                 watched_rooms = set()
                 
                 for msg in biliUser.message:
-                    if "点赞" in msg and "成功" in msg:
-                        # 解析点赞消息 "👍 名字: 点赞 5/5 次全部成功"
-                        if "全部成功" in msg:
-                            parts = msg.split(":")
-                            if len(parts) > 1:
-                                like_part = parts[1].strip()
-                                if "点赞" in like_part:
-                                    numbers = like_part.split("点赞")[1].strip().split(" ")[0]
-                                    if "/" in numbers:
-                                        success, total = numbers.split("/")
-                                        user_like_success += int(success)
-                                        user_like_attempts += int(total)
-                    elif "观看" in msg and ("分钟" in msg or "次" in msg) and "✅" in msg:
+                    if "观看" in msg and ("分钟" in msg or "次" in msg) and "✅" in msg:
                         # 提取房间名
                         room_name = msg.split(":")[0].replace("👁️  ", "").strip()
                         
@@ -199,16 +190,18 @@ async def main():
                                     pass
                 
                 # 添加用户统计
-                if user_like_attempts > 0:
-                    success_rate = (user_like_success / user_like_attempts) * 100
-                    user_report += f"\n   📊 点赞任务: {user_like_success}/{user_like_attempts} ({success_rate:.1f}%)"
-                    total_like_success += user_like_success
-                    total_like_attempts += user_like_attempts
-                
                 if user_watch_rooms > 0:
                     user_report += f"\n   ⏱️  观看任务: {user_watch_rooms}个房间, 共{user_watch_time}分钟"
                     total_watch_completed += user_watch_rooms
                     total_watch_time += user_watch_time
+                
+                # 添加未点亮灯牌提醒
+                if biliUser.unlighted_medals:
+                    unlighted_count = len(biliUser.unlighted_medals)
+                    unlighted_names = ", ".join([m["name"] for m in biliUser.unlighted_medals[:5]])
+                    if unlighted_count > 5:
+                        unlighted_names += f" 等{unlighted_count}个"
+                    user_report += f"\n   💡 灯牌待点亮({unlighted_count}个): {unlighted_names}"
                 
                 # 添加其他消息
                 for msg in biliUser.message:
@@ -234,10 +227,6 @@ async def main():
                 messageList.append(f"⚠️  失败用户: {error_count} 个")
             
             # 添加总体任务统计
-            if total_like_attempts > 0:
-                like_success_rate = (total_like_success / total_like_attempts) * 100
-                messageList.append(f"👍 总体点赞: {total_like_success}/{total_like_attempts} ({like_success_rate:.1f}%)")
-            
             if total_watch_completed > 0:
                 messageList.append(f"👁️  总体观看: {total_watch_completed}个房间, 共{total_watch_time}分钟")
             

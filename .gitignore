@@ -53,3 +53,4 @@ go.sum
 
 # 自动生成的日志文件
 src/task_log_*.json
+users.yaml

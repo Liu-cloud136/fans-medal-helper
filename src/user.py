@@ -1,4 +1,4 @@
-from aiohttp import ClientSession, ClientTimeout
+from aiohttp import ClientSession, ClientTimeout, CookieJar
 import asyncio
 import sys
 import os
@@ -26,12 +26,11 @@ logger.add(
 
 class BiliUser:
     """
-    按直播间状态与大航海身份执行点赞、观看任务
-    在2025.9更新后，大航海房间每日点赞五次 实际上仍能获得5*1.5(大航海系数加成)=7.5亲密度
-    非大航海房间通过点赞来维持灯牌点亮
+    按直播间状态与大航海身份执行观看任务
     所有房间均能通过25 min有效观时来获得30基础亲密度
     """
-    def __init__(self, access_token: str, whiteUIDs: str = '', bannedUIDs: str = '', config: dict = {}):
+    def __init__(self, access_token: str, whiteUIDs: str = '', bannedUIDs: str = '', config: dict = {},
+                 session: ClientSession = None, cookie: str = None):
         from .api import BiliApi
         
         def _parse_uid_input(uids):
@@ -87,8 +86,10 @@ class BiliUser:
         self.message = []
         self.errmsg = []
         self.is_awake = True
+        self.unlighted_medals = []  # 存储未点亮的灯牌信息
         
-        self.uuids = str(uuid.uuid4())
+        # 使用两个 UUID 以兼容心跳接口
+        self.uuids = [str(uuid.uuid4()), str(uuid.uuid4())]
         self.session = None
         self.api = None
         self._retry_info = {}
@@ -99,18 +100,57 @@ class BiliUser:
         self._last_api_call = {}
         self._api_min_interval = self.config.get("API_RATE_LIMIT", 0.5)
 
-        self.log = logger.bind(user=self.name or "未知用户", uid=self.uuids)
+        # 为每个用户创建独立的 ClientSession（含独立 CookieJar）
+        try:
+            timeout = ClientTimeout(total=5)
+            # 每个用户单独一个 CookieJar，避免不同用户间 cookie 被覆盖
+            self.session = ClientSession(timeout=timeout, trust_env=True, cookie_jar=CookieJar())
+            self._owns_session = True
+        except Exception as e:
+            # 回退（极少发生）——若创建失败再尝试使用外部传入的 session（如果有）
+            if session is not None:
+                self.session = session
+                self._owns_session = False
+            else:
+                raise
+
+        # 创建日志绑定（在 cookie 注入之前）
+        self.log = logger.bind(user=self.name or "未知用户", uid=self.uuids[0])
         
         # 确保logs目录存在
         os.makedirs("logs", exist_ok=True)
         
-        self.log_file = f"logs/{self.uuids}.log"
+        self.log_file = f"logs/{self.uuids[0]}.log"
         self.sink_id = logger.add(
             self.log_file,
             format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}",
-            filter=lambda record: record["extra"].get("uid") == self.uuids,
+            filter=lambda record: record["extra"].get("uid") in self.uuids,
             encoding="utf-8"
         )
+        
+        self.log.info("为该用户创建独立的 ClientSession 与 CookieJar（避免共享 session 导致 cookie 覆盖）")
+
+        # 用户通过配置传入原始 Cookie header 字符串（例如浏览器抓包得到的），尝试注入到 session.cookie_jar
+        if cookie:
+            try:
+                def parse_cookie_str(cookie_str: str) -> dict:
+                    pairs = [p.strip() for p in cookie_str.split(";") if "=" in p]
+                    out = {}
+                    for p in pairs:
+                        k, v = p.split("=", 1)
+                        out[k.strip()] = v.strip()
+                    return out
+
+                cookies = parse_cookie_str(cookie)
+                cookies = {k: str(v) for k, v in cookies.items()}
+                # update_cookies 接受 dict
+                self.session.cookie_jar.update_cookies(cookies)
+                self.log.info("已将配置中的 cookie 注入 session.cookie_jar（请确认包含 SESSDATA 与 bili_jct）")
+            except Exception as e:
+                self.log.warning(f"注入 cookie 失败: {e}")
+
+        # 初始化 API（session 已在上面创建）
+        self.api = BiliApi(self, self.session)
     
     def _now_beijing(self):
         return datetime.now(pytz.timezone("Asia/Shanghai"))
@@ -184,13 +224,23 @@ class BiliUser:
     # ------------------------- 登录与初始化 -------------------------
     async def _init_session(self):
         """初始化session和API对象"""
+        # 如果 session 已关闭，重新创建
         if not self.session or self.session.closed:
-            self.session = ClientSession(timeout=ClientTimeout(total=5), trust_env=True)
-            from .api import BiliApi
-            self.api = BiliApi(self, self.session)
+            try:
+                self.session = ClientSession(
+                    timeout=ClientTimeout(total=5), 
+                    trust_env=True, 
+                    cookie_jar=CookieJar()
+                )
+                # 重新初始化 API
+                from .api import BiliApi
+                self.api = BiliApi(self, self.session)
+            except Exception as e:
+                self.log.warning(f"重新创建 session 失败: {e}")
+                raise
 
     async def loginVerify(self):
-        await self._init_session()
+        """登录验证"""
         info = await self.api.loginVerift()
         if info["mid"] == 0:
             self.log.error("登录失败，access_key 可能已过期")
@@ -204,7 +254,6 @@ class BiliUser:
         """根据白名单/黑名单生成粉丝牌任务列表，保持白名单顺序"""
         self.medals.clear()
         all_medals = {}
-        like_cd = self.config.get("LIKE_CD", 0.3)
         watch_cd = self.config.get("WATCH_TARGET", 5)  # 新规：默认5次即可完成
         
         self.log.info(f"开始获取任务列表，粉丝牌顺序为（排名先后即为执行任务先后）：")
@@ -241,11 +290,9 @@ class BiliUser:
                     self.log.error(f"勋章列表 uid：{uid} 对应的主播 不存在，已跳过")
     
         # 生成待执行任务列表
-        self.like_list = []
         self.watch_list = []
+        self.unlighted_medals = []  # 重置未点亮灯牌列表
 
-        today = self._now_beijing().strftime("%Y-%m-%d")
-        logs = self._load_log().get(today, {})
         WATCH_TARGET = self.config.get("WATCH_TARGET", 5)  # 目标观看次数
 
         for medal in self.medals:
@@ -254,12 +301,14 @@ class BiliUser:
             guard_level = medal_info.get("guard_level", 0)
             is_lighted = medal_info.get("is_lighted", 1)
             
-            # 点赞任务：未完成点赞
-            # 策略：大航海房间每天点赞获得额外亲密度，普通房间点赞维持灯牌点亮
-            if like_cd and uid not in logs.get("like", []):
-                # 对所有未完成点赞的房间执行点赞任务
-                self.like_list.append(medal)
-                
+            # 记录未点亮的灯牌
+            if is_lighted == 0:
+                anchor_name = medal.get("anchor_info", {}).get("nick_name", "未知主播")
+                self.unlighted_medals.append({
+                    "name": anchor_name,
+                    "uid": uid
+                })
+            
             # 观看任务
             if watch_cd:
                 try:
@@ -269,49 +318,8 @@ class BiliUser:
                 except Exception as e:
                     self.log.warning(f"{medal['anchor_info']['nick_name']} 获取直播状态失败: {e}")
             
-        self.log.success(f"任务列表共 {len(self.medals)} 个粉丝牌(待点赞: {len(self.like_list)}, 待观看: {len(self.watch_list)})")
-        self.log.info(f"点赞房间列表: {[m['anchor_info']['nick_name'] for m in self.like_list]}")
+        self.log.success(f"任务列表共 {len(self.medals)} 个粉丝牌(待观看: {len(self.watch_list)})")
         self.log.info(f"观看房间列表: {[m['anchor_info']['nick_name'] for m in self.watch_list]}\n")
-
-    # ------------------------- 点赞任务 -------------------------
-    async def like_room(self, room_id, medal, times=5):
-        name = medal["anchor_info"]["nick_name"]
-        success_count = 0
-        target_id = medal["medal"]["target_id"]
-        
-        if self._is_task_done(target_id, "like"):
-            self.log.info(f"{name} 点赞任务已完成，跳过。")
-            return success_count
-        
-        for i in range(times):
-            fail_count = 0
-            while fail_count < 3:
-                try:
-                    await self._limited_api_call(self.api.likeInteractV3, room_id, target_id, self.mid)
-                    success_count += 1
-                    # 增加随机延迟，避免固定间隔
-                    delay = self.config.get("LIKE_CD", 0.3) + random.uniform(0.1, 0.5)
-                    await asyncio.sleep(delay)
-                    break  # 成功后退出重试循环
-                except Exception as e:
-                    fail_count += 1
-                    self.log.warning(f"{name} 第 {i+1}/{times} 次点赞失败: {e}， 进行重试 (第{fail_count}/3次)")
-                    
-                    if fail_count < 3:
-                        await asyncio.sleep(1 + random.uniform(0.5, 1.5))  # 随机延迟1-2.5秒后重试
-                    else:
-                        self.log.error(f"{name} 第 {i+1}/{times} 次点赞连续失败3次，放弃此条。")
-                        break
-
-        self.log.success(f"{name} 点赞任务完成 ({success_count}/{times} 次成功)")
-        if self.config.get("NOTIFY_DETAIL", 1):
-            if success_count == times:
-                self.message.append(f"👍 {name}: 点赞 {success_count}/{times} 次全部成功")
-            else:
-                success_rate = (success_count / times) * 100 if times > 0 else 0
-                self.errmsg.append(f"⚠️ {name}: 点赞仅完成 {success_count}/{times} 次 ({success_rate:.0f}%)")
-        
-        return success_count
 
     # ------------------------- 观看任务 -------------------------
     async def get_next_watchable(self, watch_list):
@@ -327,16 +335,6 @@ class BiliUser:
                     # 安全删除已完成的观看任务
                     if medal in watch_list:
                         watch_list.remove(medal)
-                    continue
-                    
-                # 检查灯牌状态，但不在这里点赞，避免与点赞任务冲突
-                medal_light_status = await self.api.get_medal_light_status(uid)
-                if medal_light_status == 0:
-                    self.log.warning(f"{medal['anchor_info']['nick_name']} 灯牌未点亮，点赞任务将处理，暂不开始观看")
-                    # 将未点亮的房间移到列表最后，优先处理点赞
-                    if medal in watch_list:
-                        watch_list.remove(medal)
-                        watch_list.append(medal)
                     continue
                         
                 return medal
@@ -435,7 +433,7 @@ class BiliUser:
             await asyncio.sleep(60)
     
     async def watch_room_complete(self, medal):
-        """执行单个房间的观看任务直到完成"""
+        """执行单个房间的观看任务直到完成（兼容旧接口）"""
         name = medal["anchor_info"]["nick_name"]
         try:
             ok = await self.watch_room(medal)
@@ -443,127 +441,135 @@ class BiliUser:
                 # 如果观看成功，则把 medal 从 watch_list 中移除
                 try:
                     self.watch_list.remove(medal)
-                except ValueError: # 已经被移除则忽略
-                    pass
+                except ValueError:
+                    pass  # 已经被移除则忽略
         except Exception as e:
             self.log.warning(f"{name} 的观看任务出现异常: {e}")
             return False
         return ok
 
+    async def _watch_task_wrapper(self, medal):
+        """在后台运行单个 watch_room，并在结束后根据返回值从 watch_list 中移除 medal"""
+        name = medal["anchor_info"]["nick_name"]
+        try:
+            ok = await self.watch_room(medal)
+            if ok:
+                try:
+                    self.watch_list.remove(medal)
+                except ValueError:
+                    pass
+            else:
+                pass
+        except asyncio.CancelledError:
+            self.log.info(f"{name} 的后台观看任务被取消")
+            raise
+        except Exception as e:
+            self.log.warning(f"{name} 的后台观看任务出现异常: {e}")
+        finally:
+            self._current_watch_task = None
+            self.log.info(f"{name} 后台观看任务结束。")
+
     async def task_loop(self):
-        """按直播状态与用户类型执行点赞和观看任务，串行执行"""
+        """按直播状态执行观看任务，使用子任务架构
+        - 使用独立 day_change_watcher 通过事件通知实现跨天重启
+        """
         # 确保 retry state 已存在
         if not hasattr(self, "_retry_info"):
             self._retry_info = {}
 
-        LOG_INTERVAL = 1800  # 重复日志间隔：30 分钟
-        current_day = self._now_beijing().date()  # 记录初始日期
+        # day change event：由 watcher 设置，start() 会根据这个事件决定是否重启
+        self._day_changed_event = asyncio.Event()
 
-        # ---------- 主循环 ----------
-        while True:
-            # 跨天检测
-            now_day = self._now_beijing().date()
-            if now_day != current_day:
-                self.log.success(f"检测到北京时间已进入新的一天（{current_day} → {now_day}），正在重新执行任务……")
-                try:
-                    if self.session:
-                        await self.session.close()
-                except Exception:
-                    pass
+        # ---------- 跨天监测子任务 ----------
+        async def day_change_watcher():
+            current_day = self._now_beijing().date()
+            while True:
                 await asyncio.sleep(5)
-                await self._init_session()
-                # 重新获取任务列表而不是递归调用start()
-                await self.get_medals()
-                current_day = now_day
-                continue  # 继续主循环而不是递归
+                now_day = self._now_beijing().date()
+                if now_day != current_day:
+                    self.log.success(f"检测到北京时间已进入新的一天（{current_day} → {now_day}），准备重新执行任务……")
+                    # 标记跨天事件，由上层 start() 处理重启流程
+                    self._day_changed_event.set()
+                    return
 
-            # 点赞任务处理
-            while self.like_list:
-                now = time.time()
+        # ---------- 观看管理子循环 ----------
+        async def watch_manager_loop():
+            while self.watch_list or getattr(self, "_current_watch_task", None):
+                if getattr(self, "_current_watch_task", None) is None and self.watch_list:
+                    try:
+                        watch_medal = await self.get_next_watchable(self.watch_list)
+                    except Exception as e:
+                        self.log.warning(f"选择可观看房间时出错: {e}")
+                        watch_medal = None
 
-                def _key_for(medal):
-                    return f"{medal['medal']['target_id']}:{medal['room_info']['room_id']}"
+                    if watch_medal:
+                        self.log.info(f"启动观看任务: {watch_medal['anchor_info']['nick_name']} (room: {watch_medal['room_info']['room_id']})")
+                        # 启动后台观看任务
+                        self._current_watch_task = asyncio.create_task(
+                            self._watch_task_wrapper(watch_medal)
+                        )
 
-                def _ensure_state(key):
-                    st = self._retry_info.get(key)
-                    if st is None:
-                        st = {"next_check": 0.0, "last_log": 0.0, "fail_count": 0}
-                        self._retry_info[key] = st
-                    return st
+                await asyncio.sleep(10)
 
-                # 获取当前待处理的medal
-                medaled_to_process = None
-                for medal in self.like_list:
-                    key = _key_for(medal)
-                    st = _ensure_state(key)
+        # ---------- 观看任务包装器 ----------
+        async def _watch_task_wrapper(medal):
+            """在后台运行单个 watch_room，并在结束后根据返回值从 watch_list 中移除 medal"""
+            name = medal["anchor_info"]["nick_name"]
+            try:
+                ok = await self.watch_room(medal)
+                if ok:
+                    # 如果 watch_room 成功，则把 medal 从 watch_list 中移除（若仍在列表中）
+                    try:
+                        self.watch_list.remove(medal)
+                    except ValueError:
+                        pass  # 已经被移除则忽略
+                else:
+                    # watch_room 返回 False 的情况下，watch_room 本身已经把 medal 放到队尾或记录了日志
+                    pass
+            except asyncio.CancelledError:
+                self.log.info(f"{name} 的后台观看任务被取消")
+                raise
+            except Exception as e:
+                self.log.warning(f"{name} 的后台观看任务出现异常: {e}")
+            finally:
+                self._current_watch_task = None
+                self.log.info(f"{name} 后台观看任务结束。")
 
-                    if now < st["next_check"]:
-                        continue
+        # ---------- 启动并管理子任务 ----------
+        # 启动 day watcher
+        if not hasattr(self, "_day_watch_task") or self._day_watch_task.done():
+            self._day_watch_task = asyncio.create_task(day_change_watcher())
 
-                    medaled_to_process = medal
+        # 循环检查子任务与退出条件（当 day change 触发或任务全部完成时退出）
+        try:
+            while True:
+                # 若跨天事件触发，立即中止循环以便上层 start() 进行重启
+                if getattr(self, "_day_changed_event", None) and self._day_changed_event.is_set():
                     break
 
-                if not medaled_to_process:
-                    await asyncio.sleep(5)
-                    continue
-
-                medal = medaled_to_process
-                key = _key_for(medal)
-                st = _ensure_state(key)
-
-                uid = medal["medal"]["target_id"]
-                room_id = medal["room_info"]["room_id"]
-                guard = medal["medal"]["guard_level"]
-                name = medal["anchor_info"]["nick_name"]
-
-                self.log.info(f"开始执行 {name} 点赞任务 (大航海等级: {guard})")
-                
-                try:
-                    # 新规调整：点赞每日可获得1航海亲密度，上限5亲密度
-                    # 普通房间：点赞5次（维持灯牌和获得基础亲密度）
-                    # 大航海房间：点赞5次（获得1.5倍加成的亲密度）
-                    times = 5  # 新规：统一5次点赞即可获得每日上限
-                    success_count = await self.like_room(room_id, medal, times=times)
-                    
-                    self.like_list.remove(medal)
-                    self._mark_task_done(uid, "like")
-                    if key in self._retry_info:
-                        del self._retry_info[key]
-                    
-                    self.log.info(f"{name} 点赞任务完成，成功 {success_count}/{times} 次，剩余待点赞: {len(self.like_list)}")
-                        
-                except Exception as e:
-                    st["fail_count"] += 1
-                    backoff = min(LOG_INTERVAL, 2 ** min(st["fail_count"], 10))
-                    st["next_check"] = now + backoff
-                    if now - st["last_log"] > LOG_INTERVAL:
-                        st["last_log"] = now
-                        self.log.warning(f"{medal['anchor_info']['nick_name']} 点赞失败: {e} （后续 {int(backoff)}s 内不再重试）")
-
-                await asyncio.sleep(2)
-
-            # 观看任务处理（串行执行）
-            while self.watch_list:
-                try:
-                    watch_medal = await self.get_next_watchable(self.watch_list)
-                except Exception as e:
-                    self.log.warning(f"选择可观看房间时出错: {e}")
+                # 全部任务空闲且无后台观看，退出
+                if not (self.watch_list or getattr(self, "_current_watch_task", None)):
                     break
 
-                if not watch_medal:
-                    break
+                # 启动观看管理子任务（如果尚未启动或已结束）
+                if not hasattr(self, "_watch_manager_task") or self._watch_manager_task.done():
+                    self._watch_manager_task = asyncio.create_task(watch_manager_loop())
 
-                name = watch_medal["anchor_info"]["nick_name"]
-                self.log.info(f"开始观看任务: {name} (room: {watch_medal['room_info']['room_id']})")
-                await self.watch_room_complete(watch_medal)
+                # 主循环短睡以便周期性检查（如跨天）
+                await asyncio.sleep(5)
+        finally:
+            # 退出前尝试取消仍在运行的子任务（若有）
+            for tname in ("_watch_manager_task", "_day_watch_task"):
+                task = getattr(self, tname, None)
+                if task and not task.done():
+                    task.cancel()
+                    try:
+                        await task
+                    except asyncio.CancelledError:
+                        pass
 
-            # 全部任务空闲，退出
-            if not (self.like_list or self.watch_list):
-                break
-
-            await asyncio.sleep(5)
-
-        self.log.info("所有任务处理完成或已无可执行任务，task_loop 退出。")
+        self.log.info("task_loop 退出。")
+        return
 
     async def cleanup(self):
         """清理资源"""
@@ -578,50 +584,69 @@ class BiliUser:
 
     # ------------------------- 主流程控制 -------------------------
     async def start(self):
-        """启动任务：初始化本地日志记录→登录→获取勋章列表→循环执行点赞/观看"""
+        """启动任务：初始化本地日志记录→登录→获取勋章列表→循环执行观看任务
+        start 会在跨天触发（任务未全部执行完成）时立即重新开始（即时重启到新的一天）
+        """
+        # 清理旧日志
         self._clean_old_logs()
 
-        # 登录验证
-        await self._init_session()
-        if not await self.loginVerify():
-            self.errmsg.append(f"❌ {self.name} 登录失败，access_key 可能已过期")
-            if self.session:
-                await self.session.close()
-            return
+        # 循环直到不需要继续（由跨天决定）
+        while True:
+            # 登录验证
+            if not await self.loginVerify():
+                try:
+                    if getattr(self, "session", None) and not self.session.closed:
+                        await self.session.close()
+                except Exception:
+                    pass
+                return
 
-        # 获取勋章列表
-        await self.get_medals()
-        if not self.medals:
-            self.log.info("没有可执行任务的粉丝牌")
-            self.message.append(f"ℹ️ {self.name} 没有可执行任务的粉丝牌")
-            if self.session:
-                await self.session.close()
-            return
-
-        self.log.info(f"🚀 开始执行任务：")
-
-        # 循环执行点赞→观看
-        await self.task_loop()
-
-        self.log.success("🎉 所有任务执行完成")
-        if self.session:
-            await self.session.close()
-        
-        # 收集执行结果用于通知
-        if self.config.get("NOTIFY_DETAIL", 1):
+            # 获取勋章列表
+            await self.get_medals()
             if not self.medals:
-                self.message.append("ℹ️  没有可执行任务的粉丝牌")
-            else:
-                self.message.append("✅ 任务执行完成")
-                self.message.append(f"🎖️  处理粉丝牌: {len(self.medals)}个")
-                # 获取当日完成的任务统计
-                today = self._now_beijing().strftime("%Y-%m-%d")
-                logs = self._load_log().get(today, {})
-                
-                like_count = len(logs.get("like", []))
-                watch_completed = sum(1 for medal in self.medals if medal["medal"]["target_id"] not in self.watch_list)
-                
-                if like_count > 0:
-                    self.message.append(f"👍 点赞完成: {like_count}个房间")
-                if watch_completed > 0:
-                    self.message.append(f"👁️  观看完成: {watch_completed}个房间")
+                self.log.info("没有可执行任务的粉丝牌")
+                self.message.append(f"ℹ️ {self.name} 没有可执行任务的粉丝牌")
+                try:
+                    if getattr(self, "session", None) and not self.session.closed:
+                        await self.session.close()
+                except Exception:
+                    pass
+                return
+
+            self.log.info("开始执行任务：")
+
+            # 调用主循环（阻塞直到任务完成或跨天事件触发）
+            await self.task_loop()
+
+            # 如果是跨天触发，立即重新开始
+            if getattr(self, "_day_changed_event", None) and self._day_changed_event.is_set():
+                # 清理旧 session 并立即重启新一天的任务流程
+                try:
+                    if getattr(self.api, "session", None) and not self.api.session.closed:
+                        await self.api.session.close()
+                except Exception:
+                    pass
+
+                self.log.info("检测到跨天，已退出以等待外部调度器/下一次 run() 触发新任务。")
+                return
+
+            # 否则，任务为"正常完成"
+            self.log.success("🎉 所有任务执行完成")
+            try:
+                if getattr(self.api, "session", None) and not self.api.session.closed:
+                    await self.api.session.close()
+            except Exception:
+                pass
+
+            # 收集执行结果用于通知
+            if self.config.get("NOTIFY_DETAIL", 1):
+                if not self.medals:
+                    self.message.append("ℹ️  没有可执行任务的粉丝牌")
+                else:
+                    self.message.append("✅ 任务执行完成")
+                    self.message.append(f"🎖️  处理粉丝牌: {len(self.medals)}个")
+                    watch_completed = sum(1 for medal in self.medals if medal["medal"]["target_id"] not in self.watch_list)
+                    if watch_completed > 0:
+                        self.message.append(f"👁️  观看完成: {watch_completed}个房间")
+
+            return

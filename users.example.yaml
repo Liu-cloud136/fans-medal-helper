@@ -1,5 +1,6 @@
 USERS:
     - access_key: xxxxxxxxxx # 必须使用英文冒号和空格
+      cookie: # 可选：浏览器抓包的完整 cookie 字符串（包含 SESSDATA 和 bili_jct）
       white_uid: # 白名单：仅对这些直播间执行任务
         - 3493141164329470  # 貔小貅
         - 1945855008  # 良人
@@ -9,6 +10,7 @@ USERS:
         # 格式：- UID（注意横线后空格和缩进）
       banned_uid:  # 黑名单：不执行这些直播间的任务
     - access_key:
+      cookie:
       white_uid: 
       banned_uid: 
     # 多用户按以上格式添加，注意使用空格缩进而非Tab
@@ -21,8 +23,6 @@ MOREPUSH: # 更多推送方式，详见文档
 PROXY: # 代理地址（可选），支持http/socks4/socks5，如：http://1.2.3.4:5678
 #########以下为自定义配置#########
 
-LIKE_CD: 0.5 # 点赞间隔(秒)，0=不点赞。
-
 WATCH_TARGET: 5 # 观看次数（一次五分钟），0=不观看。
 
 WATCH_MAX_ATTEMPTS: 10 # 每直播间最大尝试观看次数
@@ -32,5 +32,3 @@ API_RATE_LIMIT: 0.5 # API调用间隔(秒)
 MAX_API_CONCURRENT: 3 # 最大并发API调用数
 
 NOTIFY_DETAIL: 1 # 通知详细度：1=详细日志，0=仅错误信息
-
-WEARMEDAL: 0 # 点赞时自动戴粉丝牌，1=开启

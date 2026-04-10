@@ -17,6 +17,21 @@ from aiohttp import ClientSession
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
+# WBI 签名相关常量
+MIXIN_KEY_ENC_TAB = [
+    46,47,18,2,53,8,23,32,15,50,10,31,58,3,45,35,
+    27,43,5,49,33,9,42,19,29,28,14,39,12,38,41,13,
+    37,48,7,16,24,55,40,61,26,17,0,1,60,51,30,4,
+    22,25,54,21,56,59,6,63,57,62,11,36,20,34,44,52
+]
+
+
+def _get_mixin_key(img_key: str, sub_key: str) -> str:
+    """生成 WBI 签名用的 mixin_key"""
+    s = img_key + sub_key
+    return ''.join([s[i] for i in MIXIN_KEY_ENC_TAB])[:32]
+
+
 class Crypto:
     APPKEY = "4409e2ce8ffd12b8"
     APPSECRET = "59b43e04ad6965f34319062b478f83dd"
@@ -52,38 +67,62 @@ class SingableDict(dict):
 
 
 def retry(tries=60, interval=1):
+    """
+    重试装饰器，支持特殊错误码处理和更完善的日志输出
+    """
     def decorate(func):
         async def wrapper(*args, **kwargs):
+            import traceback
             count = 0
             func.isRetryable = False
-            log = logger.bind(user=f"{args[0].u.name}")
+            # 尽量安全绑定用户标识，避免在异常路径再次访问 args 导致新的异常
+            try:
+                user_name = getattr(args[0].u, "name", "unknown")
+            except Exception:
+                user_name = "unknown"
+            log = logger.bind(user=f"{user_name}")
+            
             while True:
                 try:
                     result = await func(*args, **kwargs)
                 except Exception as e:
                     count += 1
+                    # 特殊错误码处理
                     if type(e) == BiliApiError:
+                        # 不可重试的错误码，直接抛出
                         if e.code == 1011040:
                             raise e
+                        # 10030: 接口调用太频繁，短睡后重试
                         elif e.code == 10030:
-                            if count > tries // 6:  # 10030错误重试限制
+                            if count > tries // 6:
+                                log.error(f"API {e} 调用过于频繁，超过重试限制")
                                 raise e
                             await asyncio.sleep(10)
+                        # -504: 服务器网关超时，直接继续
                         elif e.code == -504:
                             pass
+                        # -352: B站接口更新导致的错误
+                        elif e.code == -352:
+                            log.error(f"B站接口更新，部分功能可能暂不可用: {e}")
+                            raise e
+                        # 其他 API 错误码，直接抛出
                         else:
                             raise e
+                    
+                    # 超过重试次数
                     if count > tries:
-                        log.error(f"API {urlparse(args[1]).path} 调用出现异常: {str(e)}")
+                        try:
+                            u_path = args[1] if len(args) > 1 else "unknown"
+                            log.error(f"API {u_path} 调用出现异常: {str(e)}")
+                        except Exception:
+                            log.error(f"API call出现异常且无法取得路径: {e}")
                         raise e
                     else:
-                        # log.error(f"API {urlparse(args[1]).path} 调用出现异常: {str(e)}，重试中，第{count}次重试")
                         await asyncio.sleep(interval)
                     func.isRetryable = True
                 else:
                     if func.isRetryable:
                         pass
-                        # log.success(f"重试成功")
                     return result
 
         return wrapper
@@ -122,6 +161,9 @@ class BiliApi:
     def __init__(self, u: BiliUser, s: ClientSession):
         self.u = u
         self.session = s
+        self._wbi_cache = None
+        # create per-instance headers copy to avoid cross-user mutation
+        self.headers = dict(self.__class__.headers)
 
     def __check_response(self, resp: dict) -> dict:
         if resp["code"] != 0 or ("mode_info" in resp["data"] and resp["message"] != ""):
@@ -137,6 +179,34 @@ class BiliApi:
     async def __post(self, *args, **kwargs):
         async with self.session.post(*args, **kwargs) as resp:
             return self.__check_response(await resp.json())
+
+    async def _get_wbi_key(self):
+        """
+        获取 WBI mixin_key，并缓存1小时
+        """
+        now = int(time.time())
+
+        if hasattr(self, "_wbi_cache") and self._wbi_cache is not None:
+            key, ts = self._wbi_cache
+            if now - ts < 3600:
+                return key
+
+        url = "https://api.bilibili.com/x/web-interface/nav"
+
+        async with self.session.get(url) as resp:
+            data = await resp.json()
+
+        img_url = data["data"]["wbi_img"]["img_url"]
+        sub_url = data["data"]["wbi_img"]["sub_url"]
+
+        img_key = img_url.split("/")[-1].split(".")[0]
+        sub_key = sub_url.split("/")[-1].split(".")[0]
+
+        mixin_key = _get_mixin_key(img_key, sub_key)
+
+        self._wbi_cache = (mixin_key, now)
+
+        return mixin_key
 
     @retry()
     async def loginVerift(self):
@@ -237,31 +307,6 @@ class BiliApi:
                     return 0
         return 0
 
-    @retry()
-    async def likeInteractV3(self, room_id: int, up_id: int, self_uid: int):
-        """
-        点赞直播间V3
-        """
-        url = "https://api.live.bilibili.com/xlive/app-ucenter/v1/like_info_v3/like/likeReportV3"
-        data = {
-            "access_key": self.u.access_key,
-            "actionKey": "appkey",
-            "appkey": Crypto.APPKEY,
-            "click_time": 1,
-            "room_id": room_id,
-            "anchor_id": up_id,
-            "uid": self_uid,
-        }
-        self.headers.update(
-            {
-                "Content-Type": "application/x-www-form-urlencoded",
-            }
-        ),
-        # for _ in range(3):
-        await self.__post(url, data=SingableDict(data).signed, headers=self.headers)
-
-
-    
     @retry()
     async def heartbeat(self, room_id: int, up_id: int):
         url = "https://live-trace.bilibili.com/xlive/data-interface/v1/heartbeat/mobileHeartBeat"
@@ -377,35 +422,6 @@ class BiliApi:
 #             "roomid": room_id,
 #         }
 #         self.headers.update(
-#             {
-#                 "Content-Type": "application/x-www-form-urlencoded",
-#             }
-#         ),
-#         # for _ in range(5):
-#         await self.__post(url, data=SingableDict(data).signed, headers=self.headers)
-#         # await asyncio.sleep(self.u.config['SHARE_CD'] if not self.u.config['ASYNC'] else 5)
-
-#     async def likeInteract(self, room_id: int):
-#         """
-#         点赞直播间
-#         """
-#         url = "https://api.live.bilibili.com/xlive/web-ucenter/v1/interact/likeInteract"
-#         data = {
-#             "access_key": self.u.access_key,
-#             "actionKey": "appkey",
-#             "appkey": Crypto.APPKEY,
-#             "click_time": 1,
-#             "roomid": room_id,
-#         }
-#         self.headers.update(
-#             {
-#                 "Content-Type": "application/x-www-form-urlencoded",
-#             }
-#         ),
-#         # for _ in range(3):
-#         await self.__post(url, data=SingableDict(data).signed, headers=self.headers)
-#         # await asyncio.sleep(self.u.config['LIKE_CD'] if not self.u.config['ASYNC'] else 2)
-    
 #     async def getGroups(self):
 #         url = "https://api.vc.bilibili.com/link_group/v1/member/my_groups?build=0&mobi_app=web"
 #         params = {
