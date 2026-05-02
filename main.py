@@ -1,13 +1,17 @@
 import sys
+import os
+import io
 
 MIN_PYTHON = (3, 10)
 if sys.version_info < MIN_PYTHON:
     print(f"Python {MIN_PYTHON[0]}.{MIN_PYTHON[1]} 及以上版本才支持本程序，当前版本: {sys.version_info.major}.{sys.version_info.minor}")
     sys.exit(1)
 
+if sys.platform == 'win32':
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+
 import json
-import os
-import io
 from loguru import logger
 import warnings
 import asyncio

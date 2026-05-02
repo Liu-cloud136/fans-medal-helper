@@ -42,7 +42,7 @@ class Provider(object):
 
     async def _send_message(self):
         if self.method.upper() == 'GET':
-            response = self.request('get', self.url, params=self.data)
+            response = await self.request('get', self.url, params=self.data)
         elif self.method.upper() == 'POST':
             if self.datatype.lower() == 'json':
                 response = await self.request('post', self.url, json=self.data)
