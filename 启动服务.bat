@@ -1,9 +1,9 @@
 @echo off
-title B站粉丝牌助手 - Web Service
+title Fans Medal Helper - Web Service
 
 echo ========================================
-echo     B站 Fans Medal Helper
-echo          One-Click Start
+echo     Bilibili Fans Medal Helper
+echo          One-Click Start Script
 echo ========================================
 echo.
 
