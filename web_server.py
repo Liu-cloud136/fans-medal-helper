@@ -43,6 +43,60 @@ task_status = {
 }
 
 
+def _parse_uid_input(uids) -> List[int]:
+    """
+    将多种可能的输入规范化为 int 列表。
+    支持：
+      - None -> []
+      - list/tuple -> 逐项尝试 int()
+      - str: "1,2,3" 或 "1, 2, 3" 或 "['1','2']" -> 按逗号切分再 int()
+    会忽略无法转换为 int 的项（并不会抛异常）。
+    """
+    if not uids:
+        return []
+    if isinstance(uids, (list, tuple)):
+        out = []
+        for x in uids:
+            try:
+                out.append(int(x))
+            except Exception:
+                continue
+        return out
+    if isinstance(uids, str):
+        s = uids.strip()
+        s = s.strip("[]'\"")
+        parts = [p.strip() for p in s.split(",") if p.strip()]
+        out = []
+        for p in parts:
+            try:
+                out.append(int(p))
+            except Exception:
+                import re
+                m = re.search(r"(\d+)", p)
+                if m:
+                    out.append(int(m.group(1)))
+        return out
+    try:
+        return [int(uids)]
+    except Exception:
+        return []
+
+
+def _normalize_config(config: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    规范化配置数据，确保 white_uid 和 banned_uid 始终是数组类型。
+    """
+    normalized = dict(config)
+    
+    if "USERS" in normalized and isinstance(normalized["USERS"], list):
+        for user in normalized["USERS"]:
+            if isinstance(user, dict):
+                user["white_uid"] = _parse_uid_input(user.get("white_uid"))
+                user["banned_uid"] = _parse_uid_input(user.get("banned_uid"))
+    
+    return normalized
+
+
 class UserConfig(BaseModel):
     access_key: str
     cookie: Optional[str] = ""
@@ -70,10 +124,12 @@ def load_config() -> Dict[str, Any]:
     if not os.path.exists(CONFIG_FILE):
         if os.path.exists(EXAMPLE_CONFIG_FILE):
             with open(EXAMPLE_CONFIG_FILE, "r", encoding="utf-8") as f:
-                return yaml.safe_load(f) or {}
+                config = yaml.safe_load(f) or {}
+                return _normalize_config(config)
         return {"USERS": []}
     with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f) or {"USERS": []}
+        config = yaml.safe_load(f) or {"USERS": []}
+        return _normalize_config(config)
 
 
 def save_config(config: Dict[str, Any]):
